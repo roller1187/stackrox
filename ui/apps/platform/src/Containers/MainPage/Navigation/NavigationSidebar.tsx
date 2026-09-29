@@ -15,6 +15,7 @@ import type { HasReadAccess } from 'hooks/usePermissions';
 
 // Import path variables in alphabetical order to minimize merge conflicts when multiple people add routes.
 import {
+    cveAnalyzerBasePath,
     accessControlBasePath,
     administrationEventsBasePath,
     baseImagesPath,
@@ -65,6 +66,13 @@ const keyForCompliance = 'Compliance';
 const keyForVulnerabilities = 'Vulnerability Management';
 
 function getNavDescriptions(isFeatureFlagEnabled: IsFeatureFlagEnabled): NavDescription[] {
+    const cveAnalyzerChild: ChildDescription = {
+        type: 'link',
+        content: 'CVE Analyzer',
+        path: cveAnalyzerBasePath,
+        routeKey: 'cve-analyzer',
+    };
+
     const vulnerabilityManagementChildren: ChildDescription[] = [
         {
             type: 'link',
@@ -101,6 +109,7 @@ function getNavDescriptions(isFeatureFlagEnabled: IsFeatureFlagEnabled): NavDesc
             path: vulnerabilityReportsPath,
             routeKey: ['vulnerabilities/reports/images', 'vulnerabilities/reports/nodes'],
         },
+        cveAnalyzerChild,
         {
             type: 'separator',
             key: 'following-workload-cves',

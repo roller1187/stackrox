@@ -152,6 +152,9 @@ var (
 	// UISecretsPageMigration enables the secrets list page under the Risk section
 	UISecretsPageMigration = registerFeature("Display secrets list page under Risk section", "ROX_UI_SECRETS_PAGE_MIGRATION")
 
+	// CveAnalyzer enables the integrated CVE Analyzer for vulnerability triage and reporting.
+	CveAnalyzer = registerFeature("Enable CVE Analyzer for vulnerability triage and reporting", "ROX_CVE_ANALYZER", enabled)
+
 	// LegacyScanner enables Scanner V2 integration. Off by default; locked in release builds.
 	LegacyScanner = registerFeature("Enable legacy scanner (Scanner V2) integration", "ROX_LEGACY_SCANNER", unchangeableInProd)
 

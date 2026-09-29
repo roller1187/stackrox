@@ -16,6 +16,7 @@ export const testLoginResultsPath = '/test-login-results';
 export const authResponsePrefix = '/auth/response/';
 export const authorizeRoxctlPath = '/authorize-roxctl';
 export const vulnerabilitiesBasePath = `${mainPath}/vulnerabilities`;
+export const cveAnalyzerBasePath = `${mainPath}/cve-analyzer`;
 
 // Add (related) path variables in alphabetical order to minimize merge conflicts when multiple people add routes.
 export const accessControlBasePath = `${mainPath}/access-control`;
@@ -212,6 +213,7 @@ export type RouteKey =
     | 'vulnerabilities/virtual-machine-cves'
     | 'base-images'
     | 'vulnerability-management'
+    | 'cve-analyzer'
     ;
 
 // Add properties in same order as type to minimize merge conflicts when multiple people add strings.
@@ -411,6 +413,10 @@ const routeRequirementsMap: Record<RouteKey, RouteRequirements> = {
     'base-images': {
         resourceAccessRequirements: everyResource(['ImageAdministration']),
     },
+    'cve-analyzer': {
+        featureFlagRequirements: allEnabled(['ROX_CVE_ANALYZER']),
+        resourceAccessRequirements: everyResource([]),
+    },
     'vulnerability-management': {
         resourceAccessRequirements: everyResource([
             // 'Alert', // for Cluster and Deployment and Namespace
@@ -517,6 +523,7 @@ export const basePathToLabelMap: Record<string, string> = {
     [violationsBasePath]: 'Violations',
     [complianceBasePath]: 'Compliance',
     // [complianceEnhancedBasePath]: 'Compliance (2.0)',
+    [cveAnalyzerBasePath]: 'CVE Analyzer',
     ...vulnerabilitiesPathToLabelMap,
     ...vulnManagementPathToLabelMap,
     [configManagementPath]: 'Configuration Management',

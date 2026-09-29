@@ -1,0 +1,497 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom-v5-compat';
+import {
+  Card,
+  CardBody,
+  CardTitle,
+  Button,
+  TextInput,
+  FormGroup,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  Alert,
+  Label,
+  Spinner,
+  Dropdown,
+  DropdownGroup,
+  DropdownItem,
+  DropdownList,
+  Divider,
+  MenuToggle,
+  Content,
+  PageSection,
+  SearchInput,
+  Title,
+  Toolbar,
+  ToolbarContent,
+  ToolbarItem,
+  Flex,
+  FlexItem,
+} from '@patternfly/react-core';
+import { Table, Thead, Tbody, Tr, Th, Td } from '@patternfly/react-table';
+import { EllipsisVIcon, CogIcon } from '@patternfly/react-icons';
+import { api } from './api';
+import type { Report } from './types';
+
+const BASE = '/api/v1/cve-analyzer';
+
+export default function LandingPage() {
+  const navigate = useNavigate();
+  const [reports, setReports] = useState<Report[]>([]);
+  const [file, setFile] = useState<File | null>(null);
+  const [reportName, setReportName] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState('');
+  const [dragging, setDragging] = useState(false);
+  const [preflightWarnings, setPreflightWarnings] = useState<string[]>([]);
+  const [showPreflight, setShowPreflight] = useState(false);
+  const [kebabOpen, setKebabOpen] = useState<string | null>(null);
+  const [reportSearch, setReportSearch] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const reportsRef = useRef<Report[]>([]);
+  const pendingAnalyze = useRef<Set<string>>(new Set());
+  const loadReports = useCallback(async () => {
+    try {
+      const data = await api.getReports();
+      const merged = data.map(r => {
+        if (pendingAnalyze.current.has(r.id) && r.status === 'complete') {
+          return { ...r, status: 'queued', step: 'Regeneration queued' };
+        }
+        if (pendingAnalyze.current.has(r.id) && r.status !== 'complete') {
+          pendingAnalyze.current.delete(r.id);
+        }
+        return r;
+      });
+      const prev = reportsRef.current;
+      const changed = merged.length !== prev.length || merged.some((r, i) => r.status !== prev[i]?.status || r.step !== prev[i]?.step || r.record_count !== prev[i]?.record_count);
+      if (changed) {
+        reportsRef.current = merged;
+        setReports(merged);
+      }
+      return merged;
+    } catch {
+      return reportsRef.current;
+    }
+  }, []);
+
+  const isActive = (r: Report) => r.status === 'running' || r.status === 'queued';
+
+  useEffect(() => {
+    loadReports().then((data) => {
+      if (data.some(isActive)) startPolling();
+    });
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startPolling = () => {
+    if (pollingRef.current) return;
+    pollingRef.current = setInterval(async () => {
+      const data = await loadReports();
+      if (!data.some(isActive)) {
+        clearInterval(pollingRef.current!);
+        pollingRef.current = null;
+      }
+    }, 5000);
+  };
+
+  const selectFile = (f: File) => {
+    if (!f.name.endsWith('.csv')) {
+      setUploadStatus('Please select a CSV file');
+      return;
+    }
+    setFile(f);
+    setUploadStatus('');
+    if (!reportName) setReportName(f.name.replace(/\.csv$/i, ''));
+  };
+
+  const handleUpload = async () => {
+    if (!file) return;
+    try {
+      const check = await api.preflightCheck();
+      if (check.warnings?.length) {
+        setPreflightWarnings(check.warnings);
+        setShowPreflight(true);
+        return;
+      }
+    } catch { /* proceed if check fails */ }
+    doUpload();
+  };
+
+  const doUpload = async () => {
+    if (!file) return;
+    setShowPreflight(false);
+    setUploading(true);
+    setUploadStatus('Uploading...');
+    try {
+      await api.uploadReport(file, reportName || undefined);
+      setUploadStatus('Uploaded! Analysis started.');
+      setFile(null);
+      setReportName('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      loadReports();
+      startPolling();
+    } catch (e: unknown) {
+      setUploadStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleAnalyze = async (id: string) => {
+    try {
+      const check = await api.preflightCheck();
+      if (check.warnings?.length) {
+        setPreflightWarnings(check.warnings);
+        setShowPreflight(true);
+        return;
+      }
+    } catch { /* proceed */ }
+    pendingAnalyze.current.add(id);
+    setReports(prev => prev.map(r => r.id === id ? { ...r, status: 'queued', step: 'Regeneration queued' } : r));
+    reportsRef.current = reportsRef.current.map(r => r.id === id ? { ...r, status: 'queued', step: 'Regeneration queued' } : r);
+    try {
+      await api.analyzeReport(id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      alert(msg);
+      pendingAnalyze.current.delete(id);
+      setReports(prev => prev.map(r => r.id === id ? { ...r, status: 'complete', step: 'Complete' } : r));
+    }
+    loadReports();
+    startPolling();
+  };
+
+  const handleAbort = async (id: string) => {
+    await api.abortReport(id);
+    loadReports();
+  };
+
+  const handleDelete = async (id: string, name: string) => {
+    if (!window.confirm(`Delete report "${name}"? This cannot be undone.`)) return;
+    await api.deleteReport(id);
+    loadReports();
+  };
+
+  const statusLabel = (r: Report) => {
+    switch (r.status) {
+      case 'complete':
+        return <Label color="green">Complete</Label>;
+      case 'running':
+        return (
+          <Label color="orange">
+            <Spinner size="sm" style={{ marginRight: 4 }} />
+            {r.step || 'Running...'}
+          </Label>
+        );
+      case 'queued':
+        return (
+          <Label color="blue">
+            <Spinner size="sm" style={{ marginRight: 4 }} />
+            {r.step || 'Queued'}
+          </Label>
+        );
+      case 'error':
+        return <Label color="red">{r.record_count ? 'Failed (last scan available)' : 'Error'}</Label>;
+      default:
+        return <Label color="grey">Pending</Label>;
+    }
+  };
+
+  const filteredReports = reports.filter((r) => {
+    if (!reportSearch) return true;
+    const q = reportSearch.toLowerCase();
+    return (
+      r.name.toLowerCase().includes(q) ||
+      r.id.toLowerCase().includes(q) ||
+      (r.filename && r.filename.toLowerCase().includes(q)) ||
+      r.status.toLowerCase().includes(q) ||
+      new Date(r.created_at).toLocaleString().toLowerCase().includes(q)
+    );
+  });
+
+  const formatSize = (b: number) => {
+    if (b < 1024) return `${b} B`;
+    if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
+    return `${(b / 1048576).toFixed(1)} MB`;
+  };
+
+  return (
+    <>
+      <PageSection hasBodyWrapper={false} className="pf-v6-u-display-flex pf-v6-u-flex-direction-row pf-v6-u-justify-content-space-between pf-v6-u-align-items-center">
+        <Title headingLevel="h1">CVE Analyzer</Title>
+        <Button variant="plain" icon={<CogIcon />} onClick={() => navigate('/main/cve-analyzer/settings')}>
+          Settings
+        </Button>
+      </PageSection>
+      <Divider component="div" />
+      <PageSection hasBodyWrapper={false}>
+        <Content component="p" style={{ marginBottom: 16, color: 'var(--pf-t--global--color--subtle)' }}>
+          Upload RHACS scan exports, analyze vulnerabilities, and generate interactive triage reports.
+        </Content>
+
+        <Card style={{ marginBottom: 16 }}>
+          <CardTitle>Upload New Scan</CardTitle>
+          <CardBody>
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                if (e.dataTransfer.files.length) selectFile(e.dataTransfer.files[0]);
+              }}
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: `2px dashed ${file ? 'var(--pf-t--global--color--status--success--default)' : dragging ? 'var(--pf-t--global--color--brand--default)' : 'var(--pf-t--global--border--color--default)'}`,
+                borderRadius: 8,
+                padding: '32px 16px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                marginBottom: 12,
+                background: file ? 'rgba(34,197,94,.05)' : dragging ? 'rgba(56,189,248,.05)' : undefined,
+              }}
+            >
+              <div style={{ fontSize: '2rem', marginBottom: 8 }}>
+                {file ? '✔' : '\u{1F4C4}'}
+              </div>
+              {file ? (
+                <div>
+                  <strong>{file.name}</strong> ({formatSize(file.size)})
+                  <div style={{ fontSize: '.7rem', marginTop: 4, color: 'var(--pf-t--global--color--subtle)' }}>
+                    Click to change file
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div>Drop a CSV file here or click to browse</div>
+                  <div style={{ fontSize: '.7rem', marginTop: 4, color: 'var(--pf-t--global--color--subtle)' }}>
+                    Accepts RHACS scan export (.csv)
+                  </div>
+                </div>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  if (e.target.files?.length) selectFile(e.target.files[0]);
+                }}
+              />
+            </div>
+
+            <FormGroup label="Report name" fieldId="report-name" style={{ marginBottom: 16 }}>
+              <TextInput
+                id="report-name"
+                value={reportName}
+                onChange={(_e, val) => setReportName(val)}
+                placeholder="e.g. Prod Cluster Scan - August 2026"
+              />
+            </FormGroup>
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+              <Button
+                variant="primary"
+                isDisabled={!file || uploading}
+                onClick={handleUpload}
+                isLoading={uploading}
+              >
+                Upload &amp; Analyze
+              </Button>
+              {uploadStatus && (
+                <span style={{ fontSize: '.82rem', color: 'var(--pf-t--global--color--subtle)' }}>
+                  {uploadStatus}
+                </span>
+              )}
+            </div>
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardTitle>Reports</CardTitle>
+          <CardBody>
+            {reports.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--pf-t--global--color--subtle)' }}>
+                No reports yet. Upload a CSV to get started.
+              </div>
+            ) : (
+              <>
+              <Toolbar>
+                <ToolbarContent>
+                  <ToolbarItem>
+                    <SearchInput
+                      placeholder="Search by name, status, date..."
+                      value={reportSearch}
+                      onChange={(_e, v) => setReportSearch(v)}
+                      onClear={() => setReportSearch('')}
+                      style={{ minWidth: 300 }}
+                    />
+                  </ToolbarItem>
+                  <ToolbarItem>
+                    <span style={{ fontSize: '.82rem', color: 'var(--pf-t--global--color--subtle)' }}>
+                      {filteredReports.length} of {reports.length} reports
+                    </span>
+                  </ToolbarItem>
+                </ToolbarContent>
+              </Toolbar>
+              {filteredReports.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 40, color: 'var(--pf-t--global--color--subtle)' }}>
+                  No reports match your search.
+                </div>
+              ) : (
+              <Table aria-label="Reports" variant="compact">
+                <Thead>
+                  <Tr>
+                    <Th>Name</Th>
+                    <Th>Status</Th>
+                    <Th>Created</Th>
+                    <Th>Records</Th>
+                    <Th style={{ width: 160 }}>Actions</Th>
+                  </Tr>
+                </Thead>
+                <Tbody>
+                  {filteredReports.map((r) => (
+                    <Tr key={r.id}>
+                      <Td>
+                        <strong>{r.name}</strong>
+                        {r.filename && (
+                          <div style={{ fontSize: '.75rem', color: 'var(--pf-t--global--color--subtle)' }}>
+                            {r.filename}
+                          </div>
+                        )}
+                        {r.warnings?.map((w, i) => (
+                          <Alert key={i} variant="warning" isInline isPlain title={w} style={{ marginTop: 4, fontSize: '.72rem' }} />
+                        ))}
+                      </Td>
+                      <Td>{statusLabel(r)}</Td>
+                      <Td style={{ fontSize: '.8rem' }}>
+                        {new Date(r.created_at).toLocaleString()}
+                        {r.regenerated_at && (
+                          <div style={{ fontSize: '.7rem', color: 'var(--pf-t--global--color--subtle)', marginTop: 2 }}>
+                            Regen: {new Date(r.regenerated_at).toLocaleString()}
+                          </div>
+                        )}
+                      </Td>
+                      <Td>{r.record_count ?? '--'}</Td>
+                      <Td>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          {(r.status === 'complete' || (r.status === 'error' && r.record_count)) && (
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              onClick={() => navigate(`/main/cve-analyzer/reports/${r.id}`)}
+                            >
+                              View
+                            </Button>
+                          )}
+                          {r.status === 'error' && (
+                            <Button variant="secondary" size="sm" onClick={() => handleAnalyze(r.id)}>
+                              Retry
+                            </Button>
+                          )}
+                          {r.status === 'pending' && (
+                            <Button variant="primary" size="sm" onClick={() => handleAnalyze(r.id)}>
+                              Analyze
+                            </Button>
+                          )}
+                          <Dropdown
+                            isOpen={kebabOpen === r.id}
+                            onSelect={() => setKebabOpen(null)}
+                            onOpenChange={(open) => setKebabOpen(open ? r.id : null)}
+                            toggle={(toggleRef) => (
+                              <MenuToggle
+                                ref={toggleRef}
+                                variant="plain"
+                                onClick={() => setKebabOpen(kebabOpen === r.id ? null : r.id)}
+                                isExpanded={kebabOpen === r.id}
+                                aria-label="Actions"
+                              >
+                                <EllipsisVIcon />
+                              </MenuToggle>
+                            )}
+                            popperProps={{ position: 'right' }}
+                          >
+                            {(r.status === 'complete' || (r.status === 'error' && r.record_count)) && (
+                              <DropdownGroup label="Save as">
+                                <DropdownList>
+                                  <DropdownItem key="csv" onClick={() => window.open(`${BASE}/reports/${r.id}/export.csv`, '_blank')}>
+                                    CSV
+                                  </DropdownItem>
+                                  <DropdownItem key="html" onClick={() => window.open(`${BASE}/reports/${r.id}/report.html`, '_blank')}>
+                                    HTML
+                                  </DropdownItem>
+                                  <DropdownItem key="pdf" onClick={() => window.open(`${BASE}/reports/${r.id}/report.pdf`, '_blank')}>
+                                    PDF
+                                  </DropdownItem>
+                                </DropdownList>
+                              </DropdownGroup>
+                            )}
+                            {(r.status === 'complete' || (r.status === 'error' && r.record_count)) && <Divider />}
+                            <DropdownList>
+                              <DropdownItem key="rebuild" isDisabled={isActive(r)} onClick={() => handleAnalyze(r.id)}>
+                                Regenerate Report
+                              </DropdownItem>
+                              {isActive(r) && (
+                                <DropdownItem key="abort" isDanger onClick={() => handleAbort(r.id)}>
+                                  Abort Regeneration
+                                </DropdownItem>
+                              )}
+                              <DropdownItem key="log" onClick={() => window.open(`${BASE}/reports/${r.id}/log`, '_blank')}>
+                                View Log
+                              </DropdownItem>
+                              <Divider key="sep" component="li" />
+                              <DropdownItem key="delete" isDanger onClick={() => handleDelete(r.id, r.name)}>
+                                Delete
+                              </DropdownItem>
+                            </DropdownList>
+                          </Dropdown>
+                        </div>
+                      </Td>
+                    </Tr>
+                  ))}
+                </Tbody>
+              </Table>
+              )}
+              </>
+            )}
+          </CardBody>
+        </Card>
+
+        <Modal
+          isOpen={showPreflight}
+          onClose={() => setShowPreflight(false)}
+          aria-label="Pre-scan check"
+          variant="small"
+        >
+          <ModalHeader title="Pre-scan Check" />
+          <ModalBody>
+            {preflightWarnings.map((w, i) => (
+              <Alert key={i} variant="warning" isInline title={w} style={{ marginBottom: 8 }} />
+            ))}
+            <Content component="p" style={{ marginTop: 8, fontSize: '.82rem', color: 'var(--pf-t--global--color--subtle)' }}>
+              The report will still run, but scan verification and image lookups may be incomplete.
+            </Content>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="primary" onClick={doUpload}>
+              Continue Anyway
+            </Button>
+            <Button variant="secondary" onClick={() => { setShowPreflight(false); navigate('/main/cve-analyzer/settings'); }}>
+              Go to Settings
+            </Button>
+            <Button variant="link" onClick={() => setShowPreflight(false)}>
+              Cancel
+            </Button>
+          </ModalFooter>
+        </Modal>
+      </PageSection>
+    </>
+  );
+}
