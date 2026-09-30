@@ -65,6 +65,7 @@ import (
 	credentialExpiryService "github.com/stackrox/rox/central/credentialexpiry/service"
 	clusterCveCsv "github.com/stackrox/rox/central/cve/cluster/csv"
 	clusterCVEService "github.com/stackrox/rox/central/cve/cluster/service"
+	"github.com/stackrox/rox/central/cveanalyzer"
 	"github.com/stackrox/rox/central/cve/csv"
 	"github.com/stackrox/rox/central/cve/fetcher"
 	imageCveCsv "github.com/stackrox/rox/central/cve/image/csv"
@@ -826,6 +827,12 @@ func customRoutes() (customRoutes []routes.CustomRoute) {
 			Route:         "/api/graphql",
 			Authorizer:    user.Authenticated(), // graphql enforces permissions internally
 			ServerHandler: graphqlHandler.Handler(),
+			Compression:   true,
+		},
+		{
+			Route:         "/api/v1/cve-analyzer/",
+			Authorizer:    user.Authenticated(),
+			ServerHandler: cveanalyzer.Handler(),
 			Compression:   true,
 		},
 		{

@@ -6,6 +6,7 @@ import { PageSection } from '@patternfly/react-core';
 
 // Import path variables in alphabetical order to minimize merge conflicts when multiple people add routes.
 import {
+    cveAnalyzerBasePath,
     accessControlBasePath,
     administrationEventsPathWithParam,
     apidocsPath,
@@ -310,6 +311,10 @@ const routeComponentMap: Record<RouteKey, RouteComponent> = {
                 import('Containers/Vulnerabilities/Reports/NodeVulnerabilityReports/NodeVulnerabilityReportsPage')
         ),
         path: vulnerabilityNodeReportsPath,
+    },
+    'cve-analyzer': {
+        component: asyncComponent(() => import('Containers/CveAnalyzer/CveAnalyzerPage')),
+        path: cveAnalyzerBasePath,
     },
     'vulnerability-management': {
         component: asyncComponent(() => import('Containers/VulnMgmt/WorkflowLayout')),

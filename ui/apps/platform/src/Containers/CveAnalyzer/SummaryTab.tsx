@@ -1,0 +1,231 @@
+import { useMemo } from 'react';
+import { Card, CardBody, CardTitle } from '@patternfly/react-core';
+import { Table, Thead, Tbody, Tr, Th, Td } from '@patternfly/react-table';
+import type { CVERecord } from './types';
+import { computeSLA, getDowngrade } from './sla';
+
+interface Props {
+  data: CVERecord[];
+  onDrillDown: (filter: string, value: string) => void;
+}
+
+export default function SummaryTab({ data, onDrillDown }: Props) {
+  const kevRecords = useMemo(() => {
+    const map = new Map<string, { cve: string; link: string; dateAdded: string; dueDate: string; count: number }>();
+    for (const r of data) {
+      if (!r.kev_date_added) continue;
+      const existing = map.get(r.cve);
+      if (existing) { existing.count++; continue; }
+      map.set(r.cve, { cve: r.cve, link: r.primary_link, dateAdded: r.kev_date_added, dueDate: r.kev_due_date, count: 1 });
+    }
+    return Array.from(map.values());
+  }, [data]);
+
+  const actionBreakdown = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const r of data) { map[r.action] = (map[r.action] || 0) + 1; }
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [data]);
+
+  const productBreakdown = useMemo(() => {
+    const map = new Map<string, { patch: number; update: number; monitor: number; total: number }>();
+    for (const r of data) {
+      const p = r.product || 'Unknown';
+      const e = map.get(p) || { patch: 0, update: 0, monitor: 0, total: 0 };
+      e.total++;
+      if (r.action === 'PATCH') e.patch++;
+      else if (r.action === 'UPDATE') e.update++;
+      else e.monitor++;
+      map.set(p, e);
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1].total - a[1].total);
+  }, [data]);
+
+  const priorityBreakdown = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const r of data) { map[r.priority] = (map[r.priority] || 0) + 1; }
+    const order = ['P1-CRITICAL', 'P1-HIGH-EPSS', 'P2-HIGH-IMPACT', 'P2-HIGH-EPSS', 'P3-MODERATE', 'P4-MONITOR', 'P5-LOW'];
+    return order.filter(p => map[p]).map(p => [p, map[p]] as [string, number]);
+  }, [data]);
+
+  const priorityCriteria: Record<string, string> = {
+    'P1-CRITICAL': 'Red Hat Critical severity, or Red Hat CVSS >= 9.0 + EPSS >= 1% -- confirmed active risk, patch immediately',
+    'P1-HIGH-EPSS': 'EPSS >= 10% -- high exploitation probability regardless of Red Hat CVSS score',
+    'P2-HIGH-IMPACT': 'Red Hat CVSS >= 9.0, or Red Hat CVSS >= 8.0 + EPSS >= 1% -- severe vulnerability with measurable exploit activity',
+    'P2-HIGH-EPSS': 'EPSS >= 5% -- elevated exploitation risk, warrants near-term remediation',
+    'P3-MODERATE': 'Red Hat CVSS >= 8.0, or Red Hat CVSS >= 7.0 + EPSS >= 1% -- significant but not yet urgent; schedule for next maintenance window',
+    'P4-MONITOR': 'Red Hat CVSS >= 7.0 (or Red Hat Important + >= 6.0), low EPSS -- real vulnerability but low exploitation likelihood; watch for changes',
+    'P5-LOW': 'Low Red Hat CVSS or no score -- informational; no action required unless conditions change',
+  };
+
+  const slaSummary = useMemo(() => {
+    const tiers = [
+      { tier: 'Critical/High', window: 30, breached: 0, within: 0 },
+      { tier: 'Moderate', window: 90, breached: 0, within: 0 },
+      { tier: 'Low', window: 180, breached: 0, within: 0 },
+    ];
+    for (const r of data) {
+      const sla = computeSLA(r);
+      if (!sla || !sla.tier) continue;
+      const t = tiers.find(t => t.tier === sla.tier);
+      if (!t) continue;
+      if (sla.breached) t.breached++;
+      else t.within++;
+    }
+    return tiers;
+  }, [data]);
+
+  const downgradeSummary = useMemo(() => {
+    const byTransition = new Map<string, number>();
+    for (const r of data) {
+      const dg = getDowngrade(r);
+      if (!dg) continue;
+      const key = `${dg.from} -> ${dg.to}`;
+      byTransition.set(key, (byTransition.get(key) || 0) + 1);
+    }
+    return Array.from(byTransition.entries()).sort((a, b) => b[1] - a[1]);
+  }, [data]);
+
+  const clickable: React.CSSProperties = { cursor: 'pointer' };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '16px 0' }}>
+      {kevRecords.length > 0 && (
+        <Card style={{ borderLeft: '3px solid #d97706' }}>
+          <CardTitle style={{ color: '#d97706' }}>CISA Known Exploited Vulnerabilities ({kevRecords.length} CVEs)</CardTitle>
+          <CardBody>
+            <Table aria-label="KEV records" variant="compact">
+              <Thead>
+                <Tr>
+                  <Th>CVE</Th>
+                  <Th>Date Added</Th>
+                  <Th>Due Date</Th>
+                  <Th>Records</Th>
+                </Tr>
+              </Thead>
+              <Tbody>
+                {kevRecords.map(k => (
+                  <Tr key={k.cve} style={clickable} onClick={() => onDrillDown('cve', k.cve)}>
+                    <Td>
+                      <a href={k.link} target="_blank" rel="noreferrer" style={{ color: '#38bdf8' }}
+                        onClick={e => e.stopPropagation()}>{k.cve}</a>
+                    </Td>
+                    <Td>{k.dateAdded}</Td>
+                    <Td>{k.dueDate}</Td>
+                    <Td>{k.count}</Td>
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+          </CardBody>
+        </Card>
+      )}
+
+      {slaSummary.some(t => t.breached + t.within > 0) && (
+        <Card style={{ borderLeft: '3px solid #374151' }}>
+          <CardTitle style={{ color: '#94a3b8' }}>FedRAMP SLA Status</CardTitle>
+          <CardBody>
+            <Table aria-label="SLA status" variant="compact">
+              <Thead>
+                <Tr>
+                  <Th>Tier</Th>
+                  <Th>Window</Th>
+                  <Th>Breached</Th>
+                  <Th>Within SLA</Th>
+                </Tr>
+              </Thead>
+              <Tbody>
+                {slaSummary.map(t => (
+                  <Tr key={t.tier} style={t.breached > 0 ? clickable : undefined}
+                    onClick={t.breached > 0 ? () => onDrillDown('sla_breached', t.tier) : undefined}>
+                    <Td>{t.tier}</Td>
+                    <Td>{t.window} days</Td>
+                    <Td style={{ color: t.breached > 0 ? '#b91c1c' : undefined }}>{t.breached}</Td>
+                    <Td>{t.within}</Td>
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+          </CardBody>
+        </Card>
+      )}
+
+      {downgradeSummary.length > 0 && (
+        <Card style={{ borderLeft: '3px solid #d97706' }}>
+          <CardTitle style={{ color: '#d97706' }}>Red Hat Severity Downgrades ({downgradeSummary.reduce((s, [, c]) => s + c, 0)} records)</CardTitle>
+          <CardBody>
+            <Table aria-label="Downgrade summary" variant="compact">
+              <Thead><Tr><Th>Transition</Th><Th>Records</Th></Tr></Thead>
+              <Tbody>
+                {downgradeSummary.map(([transition, count]) => (
+                  <Tr key={transition} style={clickable} onClick={() => onDrillDown('downgraded', 'true')}>
+                    <Td style={{ color: '#d97706' }}>{transition}</Td>
+                    <Td>{count}</Td>
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+            <div style={{ marginTop: 8, fontSize: '.78rem', color: '#94a3b8' }}>
+              These findings were downgraded by Red Hat from their original NVD severity. Auditors may require justification for each downgrade.
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
+      <Card>
+        <CardTitle>Remediation Action Breakdown</CardTitle>
+        <CardBody>
+          <Table aria-label="Action breakdown" variant="compact">
+            <Thead><Tr><Th>Action</Th><Th>Count</Th></Tr></Thead>
+            <Tbody>
+              {actionBreakdown.map(([action, count]) => (
+                <Tr key={action} style={clickable} onClick={() => onDrillDown('action', action)}>
+                  <Td style={{ color: action === 'PATCH' ? '#dc2626' : action === 'UPDATE' ? '#16a34a' : '#2563eb', fontWeight: 600 }}>{action}</Td>
+                  <Td>{count}</Td>
+                </Tr>
+              ))}
+            </Tbody>
+          </Table>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardTitle>Product Line Breakdown</CardTitle>
+        <CardBody>
+          <Table aria-label="Product breakdown" variant="compact">
+            <Thead><Tr><Th>Product</Th><Th>PATCH</Th><Th>UPDATE</Th><Th>MONITOR</Th><Th>Total</Th></Tr></Thead>
+            <Tbody>
+              {productBreakdown.map(([product, { patch, update, monitor, total }]) => (
+                <Tr key={product} style={clickable} onClick={() => onDrillDown('product', product)}>
+                  <Td>{product}</Td>
+                  <Td style={{ color: '#dc2626' }}>{patch}</Td>
+                  <Td style={{ color: '#16a34a' }}>{update}</Td>
+                  <Td style={{ color: '#2563eb' }}>{monitor}</Td>
+                  <Td>{total}</Td>
+                </Tr>
+              ))}
+            </Tbody>
+          </Table>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardTitle>Priority Breakdown</CardTitle>
+        <CardBody>
+          <Table aria-label="Priority breakdown" variant="compact">
+            <Thead><Tr><Th width={15}>Priority</Th><Th width={10} style={{ textAlign: 'center' }}>Count</Th><Th style={{ textAlign: 'right' }}>Criteria</Th></Tr></Thead>
+            <Tbody>
+              {priorityBreakdown.map(([priority, count]) => (
+                <Tr key={priority} style={clickable} onClick={() => onDrillDown('priority', priority)}>
+                  <Td style={{ fontWeight: 600 }}>{priority}</Td>
+                  <Td style={{ textAlign: 'center' }}>{count}</Td>
+                  <Td style={{ color: '#94a3b8', fontSize: '.85rem', textAlign: 'right' }}>{priorityCriteria[priority]}</Td>
+                </Tr>
+              ))}
+            </Tbody>
+          </Table>
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
