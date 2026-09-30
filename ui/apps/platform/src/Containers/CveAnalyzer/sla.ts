@@ -128,6 +128,12 @@ export function explainDowngrade(rhVector: string, nvdCvss: string, rhCvss: stri
       const factors = diffs.slice(0, 3).map(d => d.note).join(', ');
       summary += ` based on: ${factors}.`;
     }
+  } else if (rhScore > 0) {
+    summary = 'Red Hat and NVD CVSS scores are identical, but Red Hat assigned a lower severity label based on product-specific impact analysis.';
+    if (diffs.length > 0) {
+      const factors = diffs.slice(0, 3).map(d => d.note).join(', ');
+      summary += ` CVSS vector factors: ${factors}.`;
+    }
   }
   return { diffs, summary };
 }

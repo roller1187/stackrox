@@ -1,12 +1,14 @@
 package cveanalyzer
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	cveexport "github.com/stackrox/rox/central/cveanalyzer/export"
 	"github.com/stackrox/rox/central/cveanalyzer/pipeline"
@@ -40,9 +42,20 @@ func Handler() http.Handler {
 
 	h := &handler{store: s, pipeline: runner}
 
+	// Reset any reports stuck in running/queued from a previous Central restart
+	if reports, err := s.ListReports(context.Background()); err == nil {
+		for _, r := range reports {
+			if r.Status == cveatypes.StatusRunning || r.Status == cveatypes.StatusQueued {
+				_ = s.UpdateReportStatus(context.Background(), r.ID, cveatypes.StatusError, "", "Pipeline interrupted by Central restart")
+				log.Infof("CVE Analyzer: reset stuck report %s (%s) from %s to error", r.ID, r.Name, r.Status)
+			}
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /reports", h.listReports)
 	mux.HandleFunc("POST /reports/upload", h.uploadReport)
+	mux.HandleFunc("POST /reports/analyze-local", h.analyzeLocal)
 	mux.HandleFunc("POST /reports/{id}/analyze", h.analyzeReport)
 	mux.HandleFunc("POST /reports/{id}/rebuild", h.analyzeReport)
 	mux.HandleFunc("POST /reports/{id}/abort", h.abortReport)
@@ -52,6 +65,8 @@ func Handler() http.Handler {
 	mux.HandleFunc("POST /reports/{id}/state", h.saveProcessedState)
 	mux.HandleFunc("GET /reports/{id}/fp_state", h.getFPState)
 	mux.HandleFunc("POST /reports/{id}/fp_state", h.saveFPState)
+	mux.HandleFunc("GET /reports/{id}/notes", h.getNotes)
+	mux.HandleFunc("POST /reports/{id}/notes", h.saveNotes)
 	mux.HandleFunc("GET /reports/{id}/updates", h.getUpdates)
 	mux.HandleFunc("POST /reports/{id}/updates/acknowledge", h.acknowledgeUpdates)
 	mux.HandleFunc("GET /reports/{id}/export.csv", h.exportCSV)
@@ -59,7 +74,7 @@ func Handler() http.Handler {
 	mux.HandleFunc("GET /reports/{id}/log", h.getLog)
 	mux.HandleFunc("GET /settings", h.getSettings)
 	mux.HandleFunc("POST /settings", h.saveSettings)
-	mux.HandleFunc("POST /settings/test", h.testConnection)
+	mux.HandleFunc("POST /settings/test", h.testScanInternal)
 	mux.HandleFunc("GET /settings/check", h.preflightCheck)
 
 	return http.StripPrefix("/api/v1/cve-analyzer", mux)
@@ -154,6 +169,46 @@ func (h *handler) uploadReport(w http.ResponseWriter, r *http.Request) {
 		"id":       report.ID,
 		"name":     report.Name,
 		"warnings": warnings,
+	})
+}
+
+func (h *handler) analyzeLocal(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		writeError(w, http.StatusUnauthorized, "Authorization header required")
+		return
+	}
+
+	name := fmt.Sprintf("Local Scan — %s", time.Now().Format("Jan 2, 2006 3:04 PM"))
+	report, err := h.store.CreateReport(r.Context(), name, "local-export.csv")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create report: %v", err))
+		return
+	}
+
+	go func() {
+		ctx := context.Background()
+		h.store.UpdateReportStatus(ctx, report.ID, cveatypes.StatusRunning, "Fetching vulnerability data from Central...", "")
+
+		csvData, err := h.fetchLocalCSV(ctx, authHeader)
+		if err != nil {
+			log.Errorf("CVE Analyzer: local scan failed: %v", err)
+			h.store.UpdateReportStatus(ctx, report.ID, cveatypes.StatusError, "", fmt.Sprintf("Failed to fetch CSV: %v", err))
+			return
+		}
+
+		log.Infof("CVE Analyzer: local scan fetched %d bytes of CSV data", len(csvData))
+		if err := h.store.StoreRawCSV(ctx, report.ID, csvData); err != nil {
+			h.store.UpdateReportStatus(ctx, report.ID, cveatypes.StatusError, "", fmt.Sprintf("Failed to store CSV: %v", err))
+			return
+		}
+
+		h.pipeline.Run(report.ID, false)
+	}()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"id":   report.ID,
+		"name": report.Name,
 	})
 }
 
@@ -252,6 +307,30 @@ func (h *handler) saveFPState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// --- Notes ---
+
+func (h *handler) getNotes(w http.ResponseWriter, r *http.Request) {
+	notes, err := h.store.GetNotes(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, notes)
+}
+
+func (h *handler) saveNotes(w http.ResponseWriter, r *http.Request) {
+	var notes map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&notes); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON body")
+		return
+	}
+	if err := h.store.SaveNotes(r.Context(), r.PathValue("id"), notes); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // --- Updates ---
 
 func (h *handler) getUpdates(w http.ResponseWriter, r *http.Request) {
@@ -302,29 +381,10 @@ func (h *handler) saveSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (h *handler) testConnection(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		RoxEndpoint   string `json:"rox_endpoint"`
-		RoxAPIToken   string `json:"rox_api_token"`
-		SkipTLSVerify bool   `json:"skip_tls_verify"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid JSON body")
-		return
-	}
-
-	// Since we're running inside Central, we can just verify the token format
-	// and that settings are non-empty. The actual scanning uses internal APIs.
-	if body.RoxEndpoint == "" {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"ok":    false,
-			"error": "Endpoint is required",
-		})
-		return
-	}
+func (h *handler) testScanInternal(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"ok":     true,
-		"output": "Connection settings validated. CVE Analyzer runs inside Central and uses internal APIs for scanning.",
+		"output": "CVE Analyzer runs inside Central and uses internal scanning APIs. No external connection needed.",
 	})
 }
 
@@ -360,19 +420,42 @@ func (h *handler) exportCSV(w http.ResponseWriter, r *http.Request) {
 	writer := csv.NewWriter(w)
 	defer writer.Flush()
 
-	headers := []string{"Priority", "Action", "CVE", "Severity", "CVSS", "RH_CVSS", "EPSS_Pct",
+	notes, _ := h.store.GetNotes(r.Context(), id)
+
+	headers := []string{"Processed", "False_Positive", "Note", "Priority", "Action", "CVE", "Severity", "CVSS", "RH_CVSS", "EPSS_Pct",
 		"Product", "Image_Short", "Image_Full", "Cluster", "Namespaces", "Deployments",
-		"Component", "Component_Version", "Fixed_In", "Fix_Status",
+		"Component", "Component_Version", "Fixed_In", "Fix_Status", "RH_Fix_State", "RH_Fix_State_Detail",
 		"RHSA_Advisory", "Advisory_Link", "Primary_Link", "Remediation_Path",
 		"Triage_Reasoning", "OSV_Verification", "POAM_Justification",
 		"Discovered", "KEV_Date_Added", "KEV_Due_Date", "SLA_Deadline", "SLA_Tier"}
 	writer.Write(headers)
 
+	procKeys, _ := h.store.GetProcessedKeys(r.Context(), id)
+	fpKeys, _ := h.store.GetFPKeys(r.Context(), id)
+	procSet := make(map[string]bool, len(procKeys))
+	for _, k := range procKeys {
+		procSet[k] = true
+	}
+	fpSet := make(map[string]bool, len(fpKeys))
+	for _, k := range fpKeys {
+		fpSet[k] = true
+	}
+
 	for _, rec := range records {
+		proc := ""
+		if procSet[rec.Key] {
+			proc = "Yes"
+		}
+		fp := ""
+		if fpSet[rec.Key] {
+			fp = "Yes"
+		}
+		note := notes[rec.Key]
 		writer.Write([]string{
+			proc, fp, note,
 			rec.Priority, rec.Action, rec.CVE, rec.Severity, rec.CVSS, rec.RHCVSS, rec.EpssPct,
 			rec.Product, rec.ImageShort, rec.ImageFull, rec.Cluster, rec.Namespaces, rec.Deployments,
-			rec.Component, rec.ComponentVersion, rec.FixedIn, rec.FixStatus,
+			rec.Component, rec.ComponentVersion, rec.FixedIn, rec.FixStatus, rec.RHFixState, rec.RHFixStateDetail,
 			rec.RHSAAdvisory, rec.AdvisoryLink, rec.PrimaryLink, rec.RemediationPath,
 			rec.TriageReasoning, rec.OSVVerification, rec.POAMJustification,
 			rec.Discovered, rec.KEVDateAdded, rec.KEVDueDate, rec.SLADeadline, rec.SLATier,

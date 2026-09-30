@@ -31,7 +31,7 @@ import {
   FlexItem,
 } from '@patternfly/react-core';
 import { Table, Thead, Tbody, Tr, Th, Td } from '@patternfly/react-table';
-import { EllipsisVIcon, CogIcon } from '@patternfly/react-icons';
+import { EllipsisVIcon, CogIcon, SearchIcon, UploadIcon } from '@patternfly/react-icons';
 import { api } from './api';
 import type { Report } from './types';
 
@@ -49,6 +49,7 @@ export default function LandingPage() {
   const [showPreflight, setShowPreflight] = useState(false);
   const [kebabOpen, setKebabOpen] = useState<string | null>(null);
   const [reportSearch, setReportSearch] = useState('');
+  const [showUpload, setShowUpload] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -173,6 +174,21 @@ export default function LandingPage() {
     loadReports();
   };
 
+  const [localScanning, setLocalScanning] = useState(false);
+
+  const handleLocalScan = async () => {
+    setLocalScanning(true);
+    try {
+      await api.analyzeLocal();
+      loadReports();
+      startPolling();
+    } catch (e) {
+      alert(`Failed to start local scan: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setLocalScanning(false);
+    }
+  };
+
   const handleDelete = async (id: string, name: string) => {
     if (!window.confirm(`Delete report "${name}"? This cannot be undone.`)) return;
     await api.deleteReport(id);
@@ -224,95 +240,145 @@ export default function LandingPage() {
 
   return (
     <>
-      <PageSection hasBodyWrapper={false} className="pf-v6-u-display-flex pf-v6-u-flex-direction-row pf-v6-u-justify-content-space-between pf-v6-u-align-items-center">
-        <Title headingLevel="h1">CVE Analyzer</Title>
-        <Button variant="plain" icon={<CogIcon />} onClick={() => navigate('/main/cve-analyzer/settings')}>
-          Settings
-        </Button>
+      <PageSection>
+        <Flex direction={{ default: 'column' }}>
+          <Flex>
+            <FlexItem>
+              <Title headingLevel="h1">CVE Analyzer</Title>
+            </FlexItem>
+            <FlexItem align={{ default: 'alignRight' }}>
+              <Button variant="plain" icon={<CogIcon />} onClick={() => navigate('/main/systemconfig#cve-analyzer-config')}>
+                Settings
+              </Button>
+            </FlexItem>
+          </Flex>
+          <FlexItem>
+            Process scan results, analyze vulnerabilities, and generate interactive triage reports.
+          </FlexItem>
+        </Flex>
       </PageSection>
       <Divider component="div" />
       <PageSection hasBodyWrapper={false}>
-        <Content component="p" style={{ marginBottom: 16, color: 'var(--pf-t--global--color--subtle)' }}>
-          Upload RHACS scan exports, analyze vulnerabilities, and generate interactive triage reports.
-        </Content>
 
-        <Card style={{ marginBottom: 16 }}>
-          <CardTitle>Upload New Scan</CardTitle>
-          <CardBody>
-            <div
-              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragging(false);
-                if (e.dataTransfer.files.length) selectFile(e.dataTransfer.files[0]);
-              }}
-              onClick={() => fileInputRef.current?.click()}
-              style={{
-                border: `2px dashed ${file ? 'var(--pf-t--global--color--status--success--default)' : dragging ? 'var(--pf-t--global--color--brand--default)' : 'var(--pf-t--global--border--color--default)'}`,
-                borderRadius: 8,
-                padding: '32px 16px',
-                textAlign: 'center',
-                cursor: 'pointer',
-                marginBottom: 12,
-                background: file ? 'rgba(34,197,94,.05)' : dragging ? 'rgba(56,189,248,.05)' : undefined,
-              }}
-            >
-              <div style={{ fontSize: '2rem', marginBottom: 8 }}>
-                {file ? '✔' : '\u{1F4C4}'}
+        <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+          <Card isSelectable isSelected={!showUpload} onClick={() => setShowUpload(false)} style={{ flex: 1, cursor: 'pointer' }}>
+            <CardBody style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '20px 24px' }}>
+              <SearchIcon style={{ fontSize: '1.5rem', color: !showUpload ? 'var(--pf-t--global--color--brand--default)' : 'var(--pf-t--global--color--subtle)' }} />
+              <div>
+                <div style={{ fontWeight: 600 }}>Analyze Latest Scan</div>
+                <div style={{ fontSize: '.78rem', color: 'var(--pf-t--global--color--subtle)', marginTop: 2 }}>
+                  Fetch the latest vulnerability data from this Central instance
+                </div>
               </div>
-              {file ? (
-                <div>
-                  <strong>{file.name}</strong> ({formatSize(file.size)})
-                  <div style={{ fontSize: '.7rem', marginTop: 4, color: 'var(--pf-t--global--color--subtle)' }}>
-                    Click to change file
-                  </div>
+            </CardBody>
+          </Card>
+          <Card isSelectable isSelected={showUpload} onClick={() => setShowUpload(true)} style={{ flex: 1, cursor: 'pointer' }}>
+            <CardBody style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '20px 24px' }}>
+              <UploadIcon style={{ fontSize: '1.5rem', color: showUpload ? 'var(--pf-t--global--color--brand--default)' : 'var(--pf-t--global--color--subtle)' }} />
+              <div>
+                <div style={{ fontWeight: 600 }}>Upload CSV</div>
+                <div style={{ fontSize: '.78rem', color: 'var(--pf-t--global--color--subtle)', marginTop: 2 }}>
+                  Import a scan export from this or another cluster
                 </div>
-              ) : (
-                <div>
-                  <div>Drop a CSV file here or click to browse</div>
-                  <div style={{ fontSize: '.7rem', marginTop: 4, color: 'var(--pf-t--global--color--subtle)' }}>
-                    Accepts RHACS scan export (.csv)
-                  </div>
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+
+        {!showUpload ? (
+          <Card style={{ marginBottom: 16 }}>
+            <CardBody>
+              <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                <div style={{ fontSize: '.85rem', color: 'var(--pf-t--global--color--subtle)', marginBottom: 16 }}>
+                  This will export the current vulnerability data from Central, filter to Red Hat images only, and run the full enrichment pipeline.
                 </div>
-              )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".csv"
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  if (e.target.files?.length) selectFile(e.target.files[0]);
+                <Button
+                  variant="primary"
+                  isDisabled={localScanning}
+                  isLoading={localScanning}
+                  onClick={handleLocalScan}
+                >
+                  {localScanning ? 'Starting scan...' : 'Analyze Latest Scan'}
+                </Button>
+              </div>
+            </CardBody>
+          </Card>
+        ) : (
+          <Card style={{ marginBottom: 16 }}>
+            <CardBody>
+              <div
+                onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragging(false);
+                  if (e.dataTransfer.files.length) selectFile(e.dataTransfer.files[0]);
                 }}
-              />
-            </div>
-
-            <FormGroup label="Report name" fieldId="report-name" style={{ marginBottom: 16 }}>
-              <TextInput
-                id="report-name"
-                value={reportName}
-                onChange={(_e, val) => setReportName(val)}
-                placeholder="e.g. Prod Cluster Scan - August 2026"
-              />
-            </FormGroup>
-
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
-              <Button
-                variant="primary"
-                isDisabled={!file || uploading}
-                onClick={handleUpload}
-                isLoading={uploading}
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  border: `2px dashed ${file ? 'var(--pf-t--global--color--status--success--default)' : dragging ? 'var(--pf-t--global--color--brand--default)' : 'var(--pf-t--global--border--color--default)'}`,
+                  borderRadius: 8,
+                  padding: '32px 16px',
+                  textAlign: 'center',
+                  cursor: 'pointer',
+                  marginBottom: 12,
+                  background: file ? 'rgba(34,197,94,.05)' : dragging ? 'rgba(56,189,248,.05)' : undefined,
+                }}
               >
-                Upload &amp; Analyze
-              </Button>
-              {uploadStatus && (
-                <span style={{ fontSize: '.82rem', color: 'var(--pf-t--global--color--subtle)' }}>
-                  {uploadStatus}
-                </span>
-              )}
-            </div>
-          </CardBody>
-        </Card>
+                <UploadIcon style={{ fontSize: '1.5rem', marginBottom: 8, color: file ? 'var(--pf-t--global--color--status--success--default)' : 'var(--pf-t--global--color--subtle)' }} />
+                {file ? (
+                  <div>
+                    <strong>{file.name}</strong> ({formatSize(file.size)})
+                    <div style={{ fontSize: '.7rem', marginTop: 4, color: 'var(--pf-t--global--color--subtle)' }}>
+                      Click to change file
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div>Drop a CSV file here or click to browse</div>
+                    <div style={{ fontSize: '.7rem', marginTop: 4, color: 'var(--pf-t--global--color--subtle)' }}>
+                      Accepts RHACS scan export (.csv)
+                    </div>
+                  </div>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    if (e.target.files?.length) selectFile(e.target.files[0]);
+                  }}
+                />
+              </div>
+
+              <FormGroup label="Report name" fieldId="report-name" style={{ marginBottom: 16 }}>
+                <TextInput
+                  id="report-name"
+                  value={reportName}
+                  onChange={(_e, val) => setReportName(val)}
+                  placeholder="e.g. Prod Cluster Scan - August 2026"
+                />
+              </FormGroup>
+
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+                <Button
+                  variant="primary"
+                  isDisabled={!file || uploading}
+                  onClick={handleUpload}
+                  isLoading={uploading}
+                >
+                  Upload &amp; Analyze
+                </Button>
+                {uploadStatus && (
+                  <span style={{ fontSize: '.82rem', color: 'var(--pf-t--global--color--subtle)' }}>
+                    {uploadStatus}
+                  </span>
+                )}
+              </div>
+            </CardBody>
+          </Card>
+        )}
 
         <Card>
           <CardTitle>Reports</CardTitle>
@@ -382,7 +448,7 @@ export default function LandingPage() {
                       <Td>{r.record_count ?? '--'}</Td>
                       <Td>
                         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                          {(r.status === 'complete' || (r.status === 'error' && r.record_count)) && (
+                          {(r.status === 'complete' || (r.record_count && r.record_count > 0)) && (
                             <Button
                               variant="primary"
                               size="sm"
@@ -418,22 +484,34 @@ export default function LandingPage() {
                             )}
                             popperProps={{ position: 'right' }}
                           >
-                            {(r.status === 'complete' || (r.status === 'error' && r.record_count)) && (
+                            {(r.status === 'complete' || (r.record_count && r.record_count > 0)) && (
                               <DropdownGroup label="Save as">
                                 <DropdownList>
-                                  <DropdownItem key="csv" onClick={() => window.open(`${BASE}/reports/${r.id}/export.csv`, '_blank')}>
+                                  <DropdownItem key="csv" onClick={async () => {
+                                    try {
+                                      const resp = await api.downloadFile(`${BASE}/reports/${r.id}/export.csv`);
+                                      const blob = new Blob([resp.data], { type: 'text/csv' });
+                                      const a = document.createElement('a');
+                                      a.href = URL.createObjectURL(blob);
+                                      a.download = `${r.name || 'report'}.csv`;
+                                      a.click();
+                                    } catch { /* ignore */ }
+                                  }}>
                                     CSV
                                   </DropdownItem>
-                                  <DropdownItem key="html" onClick={() => window.open(`${BASE}/reports/${r.id}/report.html`, '_blank')}>
+                                  <DropdownItem key="html" onClick={async () => {
+                                    try {
+                                      const resp = await api.downloadFile(`${BASE}/reports/${r.id}/report.html`);
+                                      const blob = new Blob([resp.data], { type: 'text/html' });
+                                      window.open(URL.createObjectURL(blob), '_blank');
+                                    } catch { /* ignore */ }
+                                  }}>
                                     HTML
-                                  </DropdownItem>
-                                  <DropdownItem key="pdf" onClick={() => window.open(`${BASE}/reports/${r.id}/report.pdf`, '_blank')}>
-                                    PDF
                                   </DropdownItem>
                                 </DropdownList>
                               </DropdownGroup>
                             )}
-                            {(r.status === 'complete' || (r.status === 'error' && r.record_count)) && <Divider />}
+                            {(r.status === 'complete' || (r.record_count && r.record_count > 0)) && <Divider />}
                             <DropdownList>
                               <DropdownItem key="rebuild" isDisabled={isActive(r)} onClick={() => handleAnalyze(r.id)}>
                                 Regenerate Report
@@ -443,7 +521,14 @@ export default function LandingPage() {
                                   Abort Regeneration
                                 </DropdownItem>
                               )}
-                              <DropdownItem key="log" onClick={() => window.open(`${BASE}/reports/${r.id}/log`, '_blank')}>
+                              <DropdownItem key="log" onClick={async () => {
+                                try {
+                                  const text = await api.getLog(r.id);
+                                  const html = `<!DOCTYPE html><html><head><title>Log: ${r.name.replace(/</g, '&lt;')}</title></head><body><pre style="font-family:monospace;white-space:pre-wrap;padding:16px">${text.replace(/</g, '&lt;')}</pre></body></html>`;
+                                  const blob = new Blob([html], { type: 'text/html' });
+                                  window.open(URL.createObjectURL(blob), '_blank');
+                                } catch { /* ignore */ }
+                              }}>
                                 View Log
                               </DropdownItem>
                               <Divider key="sep" component="li" />

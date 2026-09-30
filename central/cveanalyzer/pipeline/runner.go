@@ -96,6 +96,26 @@ func (r *Runner) Run(reportID string, isRegen bool) {
 		return
 	}
 
+	report, _ := r.store.GetReport(ctx, reportID)
+	isLocalScan := report != nil && report.Filename == "local-export.csv"
+
+	if isLocalScan {
+		ocpInfo, err := enrichment.DetectOCPVersions(ctx, logf)
+		if err != nil {
+			logf("  OCP auto-detection unavailable: %v", err)
+			if settings.OCPTargetVersion != "" {
+				logf("  Falling back to configured OCP target version: %s", settings.OCPTargetVersion)
+			}
+		} else {
+			settings.OCPTargetVersion = ocpInfo.Latest
+			settings.OCPCurrentVersion = ocpInfo.Current
+		}
+	} else if settings.OCPTargetVersion != "" {
+		logf("  CSV upload — using configured OCP target version: %s", settings.OCPTargetVersion)
+	} else {
+		logf("  CSV upload — no OCP target version configured, OCP scanning will be skipped")
+	}
+
 	// Get raw CSV
 	csvData, err := r.store.GetRawCSV(ctx, reportID)
 	if err != nil {
@@ -112,11 +132,17 @@ func (r *Runner) Run(reportID string, isRegen bool) {
 		{"Fetching Red Hat CVSS scores", nil},
 		{"Checking CISA KEV catalog", nil},
 		{"Fetching RHSA descriptions", nil},
+		{"Verifying CVEs against OSV.dev", nil},
+		{"Verifying current image CVEs", nil},
 		{"Scanning latest image versions", nil},
+		{"Scanning OCP component images", nil},
+		{"Resolving manifest list digests", nil},
+		{"Refining remediation actions", nil},
 		{"Computing SLA deadlines", nil},
 		{"Detecting changes", nil},
 	}
 
+	totalSteps := len(steps)
 	var records []cveatypes.CVERecord
 
 	// Step 1: Parse CSV and compute priorities
@@ -127,6 +153,14 @@ func (r *Runner) Run(reportID string, isRegen bool) {
 			return fmt.Errorf("parsing CSV: %w", err)
 		}
 		logf("  Parsed %d records from CSV", len(records))
+
+		if isRegen {
+			oldRecords, err := r.store.GetRecords(ctx, reportID)
+			if err == nil && len(oldRecords) > 0 {
+				carried := carryForwardEnrichment(oldRecords, records)
+				logf("  Carried forward enrichment data for %d records", carried)
+			}
+		}
 		return nil
 	}
 
@@ -148,21 +182,63 @@ func (r *Runner) Run(reportID string, isRegen bool) {
 		return nil
 	}
 
-	// Step 5: Scan latest images (only latest, not current — per user request)
+	// Step 5: Verify CVEs against OSV.dev
 	steps[4].fn = func() error {
-		enrichment.ScanLatestImages(ctx, records, settings, logf)
+		enrichment.EnrichOSV(ctx, records, logf)
 		return nil
 	}
 
-	// Step 6: Compute SLA deadlines
+	// Step 6: Verify current image CVEs
 	steps[5].fn = func() error {
+		progressFn := func(done, total int) {
+			r.store.UpdateReportStatus(ctx, reportID, cveatypes.StatusRunning,
+				fmt.Sprintf("Step 6/%d: Verifying current image CVEs — %d/%d images", totalSteps, done, total), "")
+		}
+		enrichment.ScanCurrentImages(ctx, records, logf, progressFn)
+		return nil
+	}
+
+	// Step 7: Scan latest images
+	steps[6].fn = func() error {
+		progressFn := func(done, total int) {
+			r.store.UpdateReportStatus(ctx, reportID, cveatypes.StatusRunning,
+				fmt.Sprintf("Step 7/%d: Scanning latest image versions — %d/%d images", totalSteps, done, total), "")
+		}
+		enrichment.ScanLatestImages(ctx, records, settings, logf, progressFn)
+		return nil
+	}
+
+	// Step 8: Scan OCP component images
+	steps[7].fn = func() error {
+		progressFn := func(done, total int) {
+			r.store.UpdateReportStatus(ctx, reportID, cveatypes.StatusRunning,
+				fmt.Sprintf("Step 8/%d: Scanning OCP component images — %d/%d", totalSteps, done, total), "")
+		}
+		enrichment.ScanOCPComponents(ctx, records, settings, logf, progressFn)
+		return nil
+	}
+
+	// Step 9: Resolve manifest list digests
+	steps[8].fn = func() error {
+		enrichment.ResolveManifestListDigests(ctx, records, logf)
+		return nil
+	}
+
+	// Step 10: Refine remediation actions based on enrichment data
+	steps[9].fn = func() error {
+		RefineActions(records, logf)
+		return nil
+	}
+
+	// Step 11: Compute SLA deadlines
+	steps[10].fn = func() error {
 		ComputeSLADeadlines(records)
 		logf("  Computed SLA deadlines")
 		return nil
 	}
 
-	// Step 7: Detect changes from previous data
-	steps[6].fn = func() error {
+	// Step 12: Detect changes from previous data
+	steps[11].fn = func() error {
 		if isRegen {
 			oldRecords, err := r.store.GetRecords(ctx, reportID)
 			if err == nil && len(oldRecords) > 0 {
@@ -186,8 +262,8 @@ func (r *Runner) Run(reportID string, isRegen bool) {
 		}
 
 		stepLabel := fmt.Sprintf("Step %d/%d: %s", i+1, len(steps), step.name)
-		logf(stepLabel)
-		r.store.UpdateReportStatus(ctx, reportID, cveatypes.StatusRunning, step.name, "")
+		logf("%s", stepLabel)
+		r.store.UpdateReportStatus(ctx, reportID, cveatypes.StatusRunning, fmt.Sprintf("Step %d/%d: %s", i+1, len(steps), step.name), "")
 
 		if err := step.fn(); err != nil {
 			logf("ERROR at step %d: %v", i+1, err)

@@ -16,12 +16,22 @@ const priorityColor: Record<string, string> = {
   'P2-HIGH-IMPACT': '#ea580c', 'P2-HIGH-EPSS': '#ea580c',
   'P3-MODERATE': '#d97706', 'P4-MONITOR': '#2563eb', 'P5-LOW': '#6b7280',
 };
-const actionColor: Record<string, string> = { PATCH: '#dc2626', MONITOR: '#2563eb' };
+const actionColor: Record<string, string> = { PATCH: '#dc2626', UPDATE: '#16a34a', MONITOR: '#2563eb' };
 const fixColor: Record<string, string> = {
   FIXED_IN_LATEST: '#16a34a', STILL_VULNERABLE: '#dc2626', SCAN_UNAVAILABLE: '#6b7280',
 };
 const fixLabel: Record<string, string> = {
   FIXED_IN_LATEST: 'FIXED', STILL_VULNERABLE: 'NOT FIXED', SCAN_UNAVAILABLE: 'N/A',
+};
+const rhFixColor: Record<string, string> = {
+  'Affected': '#dc2626', 'Fix deferred': '#d97706', 'Will not fix': '#d97706',
+  'Not affected': '#16a34a', 'Fix Available': '#16a34a',
+  'New': '#6b7280', 'Out of support scope': '#6b7280',
+};
+const rhFixLabel: Record<string, string> = {
+  'Affected': 'AFFECTED', 'Fix deferred': 'DEFERRED', 'Will not fix': 'WONTFIX',
+  'Not affected': 'N/A', 'Fix Available': 'FIX AVAIL',
+  'New': 'NEW', 'Out of support scope': 'EOL',
 };
 const sevColor: Record<string, string> = {
   CRITICAL: '#dc2626', IMPORTANT: '#ea580c', MODERATE: '#d97706', LOW: '#6b7280',
@@ -30,13 +40,13 @@ const sevColor: Record<string, string> = {
 const PER_PAGE = 50;
 const PRIORITY_ORDER = ['P1-CRITICAL', 'P1-HIGH-EPSS', 'P2-HIGH-IMPACT', 'P2-HIGH-EPSS', 'P3-MODERATE', 'P4-MONITOR', 'P5-LOW'];
 
-type SortCol = 'priority' | 'action' | 'cve' | 'severity' | 'rh_cvss' | 'cvss' | 'epss_pct' | 'product' | 'image_short' | 'component' | 'fixed_in' | 'fix_status' | 'osv_verification' | 'rhsa_advisory' | 'discovered' | 'sla_deadline';
+type SortCol = 'priority' | 'action' | 'cve' | 'severity' | 'rh_cvss' | 'cvss' | 'epss_pct' | 'product' | 'image_short' | 'component' | 'fixed_in' | 'fix_status' | 'rh_fix_state' | 'osv_verification' | 'rhsa_advisory' | 'discovered' | 'sla_deadline';
 
 const FIELD_LABELS: Record<string, string> = {
   priority: 'Priority', action: 'Action', cvss: 'CVSS', rh_cvss: 'RH CVSS',
   epss_pct: 'EPSS', fix_status: 'Fix Status', severity: 'Severity',
   rh_severity: 'RH Severity', kev_date_added: 'KEV', component_version: 'Version',
-  fixed_in: 'Fixed In',
+  fixed_in: 'Fixed In', rh_fix_state: 'RH Fix State',
 };
 
 interface Props {
@@ -53,6 +63,9 @@ interface Props {
   onAcknowledge: (keys: string[]) => void;
   searchParams?: URLSearchParams;
   setSearchParams?: (nextInit: URLSearchParams | ((prev: URLSearchParams) => URLSearchParams), navigateOpts?: { replace?: boolean; state?: unknown }) => void;
+  notes?: Record<string, string>;
+  onSetNote?: (key: string, note: string) => void;
+  noteSaveStatus?: 'idle' | 'saving' | 'saved' | 'error';
 }
 
 function isRecent(discovered: string): boolean {
@@ -62,7 +75,7 @@ function isRecent(discovered: string): boolean {
   return (Date.now() - d.getTime()) < 30 * 24 * 3600 * 1000;
 }
 
-export default function CVEDataTab({ data, processedKeys, fpKeys, onToggleProcessed, onToggleFP, onBatchProcessed, onBatchFP, drillFilter, onClearDrill, updates, onAcknowledge, searchParams, setSearchParams }: Props) {
+export default function CVEDataTab({ data, processedKeys, fpKeys, onToggleProcessed, onToggleFP, onBatchProcessed, onBatchFP, drillFilter, onClearDrill, updates, onAcknowledge, searchParams, setSearchParams, notes, onSetNote, noteSaveStatus }: Props) {
   const sp = searchParams;
   const [search, setSearch] = useState(sp?.get('search') || '');
   const [actionFilter, setActionFilter] = useState(sp?.get('action') || '');
@@ -76,8 +89,8 @@ export default function CVEDataTab({ data, processedKeys, fpKeys, onToggleProces
   const [slaFilter, setSlaFilter] = useState(sp?.get('sla') || '');
   const [slaOpen, setSlaOpen] = useState(false);
   const [showDowngraded, setShowDowngraded] = useState(sp?.get('downgraded') === '1');
-  const [sortCol, setSortCol] = useState<SortCol>((sp?.get('sort') as SortCol) || 'priority');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>((sp?.get('dir') as 'asc' | 'desc') || 'asc');
+  const [sortCol, setSortCol] = useState<SortCol>((sp?.get('sortBy') as SortCol) || 'priority');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>((sp?.get('sortDir') as 'asc' | 'desc') || 'asc');
   const [perPage, setPerPage] = useState(Number(sp?.get('perPage')) || PER_PAGE);
   const [page, setPage] = useState(Number(sp?.get('page')) || 1);
   const [selectedRow, setSelectedRow] = useState<CVERecord | null>(null);
@@ -98,8 +111,8 @@ export default function CVEDataTab({ data, processedKeys, fpKeys, onToggleProces
       set('hideFP', hideFP ? '1' : '0', '1');
       set('sla', slaFilter, '');
       set('downgraded', showDowngraded ? '1' : '0', '0');
-      set('sort', sortCol, 'priority');
-      set('dir', sortDir, 'asc');
+      set('sortBy', sortCol, 'priority');
+      set('sortDir', sortDir, 'asc');
       set('page', String(page), '1');
       set('perPage', String(perPage), String(PER_PAGE));
       return next;
@@ -122,6 +135,7 @@ export default function CVEDataTab({ data, processedKeys, fpKeys, onToggleProces
         if (drillFilter.field === 'product' && r.product !== drillFilter.value) return false;
         if (drillFilter.field === 'cve' && r.cve !== drillFilter.value) return false;
         if (drillFilter.field === 'fix_status' && r.fix_status !== drillFilter.value) return false;
+        if (drillFilter.field === 'rh_fix_state' && r.rh_fix_state !== drillFilter.value) return false;
         if (drillFilter.field === 'kev' && !r.kev_date_added) return false;
         if (drillFilter.field === 'sla_breached') {
           const sla = computeSLA(r);
@@ -221,6 +235,9 @@ export default function CVEDataTab({ data, processedKeys, fpKeys, onToggleProces
           onClose={() => setSelectedRow(null)}
           toolbarRef={toolbarRef}
           allData={data}
+          notes={notes}
+          onSetNote={onSetNote}
+          noteSaveStatus={noteSaveStatus}
         />
       )}
       <div>
@@ -241,6 +258,7 @@ export default function CVEDataTab({ data, processedKeys, fpKeys, onToggleProces
                   <ToggleGroup aria-label="Action filter">
                     <ToggleGroupItem text="All" isSelected={!actionFilter} onChange={() => { setActionFilter(''); setPage(1); }} />
                     <ToggleGroupItem text="PATCH" isSelected={actionFilter === 'PATCH'} onChange={() => { setActionFilter(actionFilter === 'PATCH' ? '' : 'PATCH'); setPage(1); }} />
+                    <ToggleGroupItem text="UPDATE" isSelected={actionFilter === 'UPDATE'} onChange={() => { setActionFilter(actionFilter === 'UPDATE' ? '' : 'UPDATE'); setPage(1); }} />
                     <ToggleGroupItem text="MONITOR" isSelected={actionFilter === 'MONITOR'} onChange={() => { setActionFilter(actionFilter === 'MONITOR' ? '' : 'MONITOR'); setPage(1); }} />
                   </ToggleGroup>
                 </ToolbarItem>
@@ -353,6 +371,7 @@ export default function CVEDataTab({ data, processedKeys, fpKeys, onToggleProces
                 <Th {...sortParams('component')}>Component{sortArrow('component')}</Th>
                 <Th {...sortParams('fixed_in')}>Fixed In{sortArrow('fixed_in')}</Th>
                 <Th {...sortParams('fix_status')}>Fix Status{sortArrow('fix_status')}</Th>
+                <Th {...sortParams('rh_fix_state')}>RH Fix{sortArrow('rh_fix_state')}</Th>
                 <Th {...sortParams('osv_verification')}>OSV{sortArrow('osv_verification')}</Th>
                 <Th {...sortParams('rhsa_advisory')}>RHSA{sortArrow('rhsa_advisory')}</Th>
                 <Th {...sortParams('discovered')}>Discovered{sortArrow('discovered')}</Th>
@@ -428,6 +447,13 @@ export default function CVEDataTab({ data, processedKeys, fpKeys, onToggleProces
                     {r.fix_status && (
                       <Label style={{ backgroundColor: fixColor[r.fix_status] || '#6b7280', color: '#fff', fontSize: '.7rem' }}>
                         {fixLabel[r.fix_status] || r.fix_status}
+                      </Label>
+                    )}
+                  </Td>
+                  <Td>
+                    {r.rh_fix_state && (
+                      <Label style={{ backgroundColor: rhFixColor[r.rh_fix_state] || '#6b7280', color: '#fff', fontSize: '.7rem' }}>
+                        {rhFixLabel[r.rh_fix_state] || r.rh_fix_state}
                       </Label>
                     )}
                   </Td>

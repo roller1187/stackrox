@@ -70,6 +70,12 @@ CREATE TABLE IF NOT EXISTS cve_analyzer_raw_csv (
     csv_data BYTEA NOT NULL,
     PRIMARY KEY(report_id)
 );
+
+CREATE TABLE IF NOT EXISTS cve_analyzer_notes (
+    report_id TEXT NOT NULL REFERENCES cve_analyzer_reports(id) ON DELETE CASCADE,
+    data JSONB NOT NULL DEFAULT '{}',
+    PRIMARY KEY(report_id)
+);
 `
 
 // Store provides persistence for the CVE Analyzer.
@@ -440,6 +446,37 @@ func (s *Store) SaveSettings(ctx context.Context, settings *cveatypes.Settings) 
 	_, err = s.db.Exec(ctx,
 		`INSERT INTO cve_analyzer_settings (id, data) VALUES (1, $1)
 		 ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data`, data)
+	return err
+}
+
+// --- Notes ---
+
+func (s *Store) GetNotes(ctx context.Context, reportID string) (map[string]string, error) {
+	row := s.db.QueryRow(ctx, `SELECT data FROM cve_analyzer_notes WHERE report_id = $1`, reportID)
+	var data []byte
+	err := row.Scan(&data)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	var notes map[string]string
+	if err := json.Unmarshal(data, &notes); err != nil {
+		return map[string]string{}, nil
+	}
+	return notes, nil
+}
+
+func (s *Store) SaveNotes(ctx context.Context, reportID string, notes map[string]string) error {
+	data, err := json.Marshal(notes)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx,
+		`INSERT INTO cve_analyzer_notes (report_id, data) VALUES ($1, $2)
+		 ON CONFLICT (report_id) DO UPDATE SET data = EXCLUDED.data`,
+		reportID, data)
 	return err
 }
 

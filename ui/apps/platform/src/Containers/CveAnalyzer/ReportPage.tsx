@@ -33,6 +33,8 @@ export default function ReportPage() {
   const [data, setData] = useState<CVERecord[]>([]);
   const [processedKeys, setProcessedKeys] = useState<Set<string>>(new Set());
   const [fpKeys, setFpKeys] = useState<Set<string>>(new Set());
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [noteSaveStatus, setNoteSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
@@ -59,13 +61,15 @@ export default function ReportPage() {
       api.getProcessedState(id),
       api.getFPState(id),
       api.getUpdates(id),
-    ]).then(([rep, d, proc, fp, upd]) => {
+      api.getNotes(id),
+    ]).then(([rep, d, proc, fp, upd, n]) => {
       setReport(rep);
       const withKeys = d.map(r => ({ ...r, key: r.key || `${r.cve}|||${r.image_full}` }));
       setData(withKeys);
       setProcessedKeys(new Set(proc));
       setFpKeys(new Set(fp));
       setUpdates(upd);
+      setNotes(n);
     }).catch(e => setError(String(e)));
   }, [id]);
 
@@ -96,13 +100,15 @@ export default function ReportPage() {
       api.getProcessedState(id),
       api.getFPState(id),
       api.getUpdates(id),
-    ]).then(([rep, d, proc, fp, upd]) => {
+      api.getNotes(id),
+    ]).then(([rep, d, proc, fp, upd, n]) => {
       setReport(rep);
       const withKeys = d.map(r => ({ ...r, key: r.key || `${r.cve}|||${r.image_full}` }));
       setData(withKeys);
       setProcessedKeys(new Set(proc));
       setFpKeys(new Set(fp));
       setUpdates(upd);
+      setNotes(n);
       if (rep?.status === 'running' || rep?.status === 'queued') {
         setRegenerating(true);
         startPolling();
@@ -142,6 +148,20 @@ export default function ReportPage() {
       return next;
     });
   }, [id]);
+
+  const setNote = useCallback(async (key: string, note: string) => {
+    const next = { ...notes };
+    if (note) next[key] = note; else delete next[key];
+    setNotes(next);
+    setNoteSaveStatus('saving');
+    try {
+      await api.saveNotes(id!, next);
+      setNoteSaveStatus('saved');
+      setTimeout(() => setNoteSaveStatus(s => s === 'saved' ? 'idle' : s), 2000);
+    } catch {
+      setNoteSaveStatus('error');
+    }
+  }, [id, notes]);
 
   const batchSetFP = useCallback((keys: string[], checked: boolean) => {
     setFpKeys(prev => {
@@ -220,6 +240,7 @@ export default function ReportPage() {
   }
 
   const patchCount = data.filter(r => r.action === 'PATCH').length;
+  const updateCount = data.filter(r => r.action === 'UPDATE').length;
   const monitorCount = data.filter(r => r.action === 'MONITOR').length;
   const kevCount = new Set(data.filter(r => r.kev_date_added).map(r => r.cve)).size;
   const uniqueCves = new Set(data.map(r => r.cve)).size;
@@ -304,14 +325,26 @@ export default function ReportPage() {
           popperProps={{ position: 'right' }}
         >
           <DropdownList>
-            <DropdownItem key="csv" onClick={() => window.open(`${BASE}/reports/${id}/export.csv`, '_blank')}>
+            <DropdownItem key="csv" onClick={async () => {
+              try {
+                const resp = await api.downloadFile(`${BASE}/reports/${id}/export.csv`);
+                const blob = new Blob([resp.data], { type: 'text/csv' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `${report?.name || 'report'}.csv`;
+                a.click();
+              } catch { /* ignore */ }
+            }}>
               CSV
             </DropdownItem>
-            <DropdownItem key="html" onClick={() => window.open(`${BASE}/reports/${id}/report.html`, '_blank')}>
+            <DropdownItem key="html" onClick={async () => {
+              try {
+                const resp = await api.downloadFile(`${BASE}/reports/${id}/report.html`);
+                const blob = new Blob([resp.data], { type: 'text/html' });
+                window.open(URL.createObjectURL(blob), '_blank');
+              } catch { /* ignore */ }
+            }}>
               HTML
-            </DropdownItem>
-            <DropdownItem key="pdf" onClick={() => window.open(`${BASE}/reports/${id}/report.pdf`, '_blank')}>
-              PDF
             </DropdownItem>
           </DropdownList>
         </Dropdown>
@@ -331,6 +364,7 @@ export default function ReportPage() {
         <StatCard label="Total Records" value={data.length} />
         <StatCard label="Unique CVEs" value={uniqueCves} />
         <StatCard label="PATCH" value={patchCount} color="#dc2626" onClick={() => handleDrill('action', 'PATCH')} />
+        <StatCard label="UPDATE" value={updateCount} color="#16a34a" onClick={() => handleDrill('action', 'UPDATE')} />
         <StatCard label="MONITOR" value={monitorCount} color="#2563eb" onClick={() => handleDrill('action', 'MONITOR')} />
         <StatCard label="P1" value={p1Count} color="#dc2626" onClick={() => handleDrill('priority', 'P1')} />
         <StatCard label="KEV" value={kevCount} color="#d97706" onClick={() => handleDrill('kev', 'true')} />
@@ -372,6 +406,9 @@ export default function ReportPage() {
             onAcknowledge={acknowledgeUpdate}
             searchParams={searchParams}
             setSearchParams={setSearchParams}
+            notes={notes}
+            onSetNote={setNote}
+            noteSaveStatus={noteSaveStatus}
           />
         </Tab>
         <Tab eventKey="summary" title={<TabTitleText>Summary</TabTitleText>}>
@@ -380,7 +417,7 @@ export default function ReportPage() {
         <Tab eventKey="processed" title={
           <TabTitleText>Processed ({processedKeys.size}){updateBadge(procUpdateCount)}</TabTitleText>
         }>
-          <ProcessedTab data={data} processedKeys={processedKeys} fpKeys={fpKeys} onToggleProcessed={toggleProcessed} onToggleFP={toggleFP} updates={updates} onAcknowledge={acknowledgeUpdate} />
+          <ProcessedTab data={data} processedKeys={processedKeys} fpKeys={fpKeys} onToggleProcessed={toggleProcessed} onToggleFP={toggleFP} updates={updates} onAcknowledge={acknowledgeUpdate} notes={notes} onSetNote={setNote} noteSaveStatus={noteSaveStatus} />
         </Tab>
         <Tab eventKey="fp" title={
           <TabTitleText>False Positives ({fpKeys.size}){updateBadge(fpUpdateCount)}</TabTitleText>

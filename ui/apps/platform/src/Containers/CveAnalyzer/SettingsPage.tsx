@@ -9,7 +9,6 @@ import {
   Card,
   CardBody,
   CardTitle,
-  Checkbox,
   Divider,
   Form,
   FormGroup,
@@ -21,7 +20,6 @@ import {
   TextInput,
   Title,
   Flex,
-  FlexItem,
 } from '@patternfly/react-core';
 import type { Settings } from './types';
 import { api } from './api';
@@ -37,12 +35,9 @@ let toastId = 0;
 export default function SettingsPage() {
   const navigate = useNavigate();
   const [settings, setSettings] = useState<Settings>({
-    rox_endpoint: '',
-    rox_api_token: '',
     pull_secret: '',
     ocp_target_version: '',
     ocp_current_version: '',
-    skip_tls_verify: true,
     scan_workers: 10,
     auto_regenerate_enabled: false,
     auto_regenerate_schedule: 'daily_midnight',
@@ -80,19 +75,11 @@ export default function SettingsPage() {
   };
 
   const handleTest = async () => {
-    if (!settings.rox_endpoint || !settings.rox_api_token) {
-      toast('Enter Central URL and API Token first', AlertVariant.warning);
-      return;
-    }
-    toast('Testing connection...', AlertVariant.info);
+    toast('Testing internal scanner...', AlertVariant.info);
     try {
-      const res = await api.testConnection(
-        settings.rox_endpoint,
-        settings.rox_api_token,
-        settings.skip_tls_verify
-      );
-      if (res.ok) toast('Connected to RHACS Central', AlertVariant.success);
-      else toast(`Connection failed: ${res.error || 'unknown'}`, AlertVariant.danger);
+      const res = await api.testConnection();
+      if (res.ok) toast(res.output || 'Internal scanner is available', AlertVariant.success);
+      else toast(`Scanner check failed: ${res.error || 'unknown'}`, AlertVariant.danger);
     } catch (e: unknown) {
       toast(`Error: ${e instanceof Error ? e.message : e}`, AlertVariant.danger);
     }
@@ -122,37 +109,6 @@ export default function SettingsPage() {
       <PageSection hasBodyWrapper={false}>
         <Flex direction={{ default: 'column' }} gap={{ default: 'gapMd' }}>
           <Card>
-            <CardTitle>RHACS / StackRox Central</CardTitle>
-            <CardBody>
-              <Form>
-                <FormGroup label="Central URL" fieldId="rox-endpoint">
-                  <TextInput
-                    id="rox-endpoint"
-                    value={settings.rox_endpoint}
-                    onChange={(_e, v) => update('rox_endpoint', v)}
-                    placeholder="central-rhacs-operator.apps..."
-                  />
-                </FormGroup>
-                <FormGroup label="API Token" fieldId="rox-token">
-                  <TextInput
-                    id="rox-token"
-                    type="password"
-                    value={settings.rox_api_token}
-                    onChange={(_e, v) => update('rox_api_token', v)}
-                    placeholder="eyJhbGci..."
-                  />
-                </FormGroup>
-                <Checkbox
-                  id="skip-tls"
-                  label="Skip TLS verification (for self-signed certificates)"
-                  isChecked={settings.skip_tls_verify}
-                  onChange={(_e, checked) => update('skip_tls_verify', checked)}
-                />
-              </Form>
-            </CardBody>
-          </Card>
-
-          <Card>
             <CardTitle>Registry Authentication</CardTitle>
             <CardBody>
               <Form>
@@ -172,25 +128,34 @@ export default function SettingsPage() {
           </Card>
 
           <Card>
-            <CardTitle>OpenShift Cluster</CardTitle>
+            <CardTitle>OpenShift — CSV Upload Settings</CardTitle>
             <CardBody>
               <Form>
-                <FormGroup label="OCP Target Version" fieldId="ocp-target">
-                  <TextInput
-                    id="ocp-target"
-                    value={settings.ocp_target_version}
-                    onChange={(_e, v) => update('ocp_target_version', v)}
-                    placeholder="4.18.54"
-                  />
-                </FormGroup>
                 <FormGroup label="OCP Current Version" fieldId="ocp-current">
                   <TextInput
                     id="ocp-current"
                     value={settings.ocp_current_version}
                     onChange={(_e, v) => update('ocp_current_version', v)}
-                    placeholder="4.18.50"
+                    placeholder="Auto-detected for local scans"
                   />
+                  <div style={{ fontSize: '.75rem', color: 'var(--pf-t--global--color--subtle)', marginTop: 4 }}>
+                    The OCP version of the cluster the CSV was exported from
+                  </div>
                 </FormGroup>
+                <FormGroup label="OCP Target Version" fieldId="ocp-target">
+                  <TextInput
+                    id="ocp-target"
+                    value={settings.ocp_target_version}
+                    onChange={(_e, v) => update('ocp_target_version', v)}
+                    placeholder="Auto-detected for local scans"
+                  />
+                  <div style={{ fontSize: '.75rem', color: 'var(--pf-t--global--color--subtle)', marginTop: 4 }}>
+                    The OCP version to scan components against
+                  </div>
+                </FormGroup>
+                <div style={{ fontSize: '.75rem', color: 'var(--pf-t--global--color--subtle)', marginTop: 8 }}>
+                  These fields are only used for manually uploaded CSVs from other clusters. Local scans auto-detect both versions from the cluster and Cincinnati.
+                </div>
               </Form>
             </CardBody>
           </Card>
@@ -271,7 +236,7 @@ export default function SettingsPage() {
 
           <Flex gap={{ default: 'gapSm' }}>
             <Button variant="primary" onClick={handleSave}>Save Settings</Button>
-            <Button variant="secondary" onClick={handleTest}>Test RHACS Connection</Button>
+            <Button variant="secondary" onClick={handleTest}>Test Internal Scanner</Button>
           </Flex>
         </Flex>
       </PageSection>

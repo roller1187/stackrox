@@ -1,108 +1,84 @@
+import axios from 'services/instance';
+
 import type { Report, Settings, CVERecord, PreflightResult, UpdatesMap } from './types';
 
-function getBase(): string {
-  const w = window as unknown as Record<string, unknown>;
-  if (w.__CVE_ANALYZER_API__) return String(w.__CVE_ANALYZER_API__);
-  return '/api/v1/cve-analyzer';
-}
-const BASE = getBase();
-
-class ApiError extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try {
-      const body = await res.json();
-      if (body.error) msg = body.error;
-    } catch { /* use default msg */ }
-    throw new ApiError(res.status, msg);
-  }
-  return res.json();
-}
+const BASE = '/api/v1/cve-analyzer';
 
 export const api = {
-  getReports: () => fetchJson<Report[]>(`${BASE}/reports`),
+  getReports: () =>
+    axios.get<Report[]>(`${BASE}/reports`).then((r) => r.data),
 
   uploadReport: async (file: File, name?: string) => {
     const form = new FormData();
     form.append('file', file);
     if (name) form.append('name', name);
-    return fetchJson<{ id: string; name: string; warnings?: string[] }>(
+    const res = await axios.post<{ id: string; name: string; warnings?: string[] }>(
       `${BASE}/reports/upload`,
-      { method: 'POST', body: form }
+      form
     );
+    return res.data;
   },
 
   analyzeReport: (id: string) =>
-    fetchJson<{ ok: boolean; warnings?: string[] }>(
-      `${BASE}/reports/${id}/analyze`,
-      { method: 'POST' }
-    ),
+    axios.post<{ ok: boolean; warnings?: string[] }>(`${BASE}/reports/${id}/analyze`).then((r) => r.data),
 
   rebuildReport: (id: string) =>
-    fetchJson<{ ok: boolean }>(`${BASE}/reports/${id}/rebuild`, { method: 'POST' }),
+    axios.post<{ ok: boolean }>(`${BASE}/reports/${id}/rebuild`).then((r) => r.data),
 
   abortReport: (id: string) =>
-    fetchJson<{ ok: boolean }>(`${BASE}/reports/${id}/abort`, { method: 'POST' }),
+    axios.post<{ ok: boolean }>(`${BASE}/reports/${id}/abort`).then((r) => r.data),
 
   deleteReport: (id: string) =>
-    fetchJson<{ ok: boolean }>(`${BASE}/reports/${id}`, { method: 'DELETE' }),
+    axios.delete<{ ok: boolean }>(`${BASE}/reports/${id}`).then((r) => r.data),
 
-  getReportData: (id: string) => fetchJson<CVERecord[]>(`${BASE}/reports/${id}/data`),
+  getReportData: (id: string) =>
+    axios.get<CVERecord[]>(`${BASE}/reports/${id}/data`).then((r) => r.data),
 
-  getProcessedState: (id: string) => fetchJson<string[]>(`${BASE}/reports/${id}/state`),
+  getProcessedState: (id: string) =>
+    axios.get<string[]>(`${BASE}/reports/${id}/state`).then((r) => r.data),
 
   saveProcessedState: (id: string, keys: string[]) =>
-    fetchJson<{ ok: boolean }>(`${BASE}/reports/${id}/state`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(keys),
-    }),
+    axios.post<{ ok: boolean }>(`${BASE}/reports/${id}/state`, keys).then((r) => r.data),
 
-  getFPState: (id: string) => fetchJson<string[]>(`${BASE}/reports/${id}/fp_state`),
+  getNotes: (id: string) =>
+    axios.get<Record<string, string>>(`${BASE}/reports/${id}/notes`).then((r) => r.data),
+
+  saveNotes: (id: string, notes: Record<string, string>) =>
+    axios.post<{ ok: boolean }>(`${BASE}/reports/${id}/notes`, notes).then((r) => r.data),
+
+  getFPState: (id: string) =>
+    axios.get<string[]>(`${BASE}/reports/${id}/fp_state`).then((r) => r.data),
 
   saveFPState: (id: string, keys: string[]) =>
-    fetchJson<{ ok: boolean }>(`${BASE}/reports/${id}/fp_state`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(keys),
-    }),
+    axios.post<{ ok: boolean }>(`${BASE}/reports/${id}/fp_state`, keys).then((r) => r.data),
 
-  getUpdates: (id: string) => fetchJson<UpdatesMap>(`${BASE}/reports/${id}/updates`),
+  getUpdates: (id: string) =>
+    axios.get<UpdatesMap>(`${BASE}/reports/${id}/updates`).then((r) => r.data),
 
   acknowledgeUpdates: (id: string, keys: string[]) =>
-    fetchJson<{ ok: boolean }>(`${BASE}/reports/${id}/updates/acknowledge`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keys }),
-    }),
+    axios.post<{ ok: boolean }>(`${BASE}/reports/${id}/updates/acknowledge`, { keys }).then((r) => r.data),
 
-  getSettings: () => fetchJson<Settings>(`${BASE}/settings`),
+  getSettings: () =>
+    axios.get<Settings>(`${BASE}/settings`).then((r) => r.data),
 
   saveSettings: (s: Settings) =>
-    fetchJson<{ ok: boolean }>(`${BASE}/settings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(s),
-    }),
+    axios.post<{ ok: boolean }>(`${BASE}/settings`, s).then((r) => r.data),
 
-  testConnection: (ep: string, token: string, skipTls: boolean) =>
-    fetchJson<{ ok: boolean; error?: string; output?: string }>(
+  testConnection: () =>
+    axios.post<{ ok: boolean; error?: string; output?: string }>(
       `${BASE}/settings/test`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rox_endpoint: ep, rox_api_token: token, skip_tls_verify: skipTls }),
-      }
-    ),
+      {}
+    ).then((r) => r.data),
 
-  preflightCheck: () => fetchJson<PreflightResult>(`${BASE}/settings/check`),
+  preflightCheck: () =>
+    axios.get<PreflightResult>(`${BASE}/settings/check`).then((r) => r.data),
+
+  getLog: (id: string) =>
+    axios.get<string>(`${BASE}/reports/${id}/log`, { transformResponse: [(d) => d] }).then((r) => r.data),
+
+  downloadFile: (url: string) =>
+    axios.get(url, { responseType: 'blob' }),
+
+  analyzeLocal: () =>
+    axios.post<{ id: string; name: string }>(`${BASE}/reports/analyze-local`).then((r) => r.data),
 };

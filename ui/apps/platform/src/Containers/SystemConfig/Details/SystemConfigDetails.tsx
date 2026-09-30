@@ -13,9 +13,11 @@ import {
 import { OutlinedQuestionCircleIcon } from '@patternfly/react-icons';
 
 import PopoverBodyContent from 'Components/PopoverBodyContent';
+import useFeatureFlags from 'hooks/useFeatureFlags';
 import useTelemetryConfig from 'hooks/useTelemetryConfig';
 import type { SystemConfig } from 'types/config.proto';
 
+import CveAnalyzerConfigSection from './CveAnalyzerConfigSection';
 import PrivateConfigDataRetentionDetails from './PrivateConfigDataRetentionDetails';
 import PublicConfigBannerDetails from './PublicConfigBannerDetails';
 import PublicConfigLoginDetails from './PublicConfigLoginDetails';
@@ -32,7 +34,9 @@ function SystemConfigDetails({
     systemConfig,
     isClustersRoutePathRendered,
 }: SystemConfigDetailsProps): ReactElement {
+    const { isFeatureFlagEnabled } = useFeatureFlags();
     const { isTelemetryConfigured } = useTelemetryConfig();
+    const isCveAnalyzerEnabled = isFeatureFlagEnabled('ROX_CVE_ANALYZER');
 
     return (
         <Stack hasGutter>
@@ -113,6 +117,14 @@ function SystemConfigDetails({
                     </Grid>
                 </Stack>
             </PageSection>
+            {isCveAnalyzerEnabled && (
+                <PageSection id="cve-analyzer-config" data-testid="cve-analyzer-config">
+                    <Stack hasGutter>
+                        <Title headingLevel="h2">CVE Analyzer configuration</Title>
+                        <CveAnalyzerConfigSection />
+                    </Stack>
+                </PageSection>
+            )}
         </Stack>
     );
 }

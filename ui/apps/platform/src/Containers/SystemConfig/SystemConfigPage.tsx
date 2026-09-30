@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
+import { useLocation } from 'react-router-dom-v5-compat';
 import {
     Alert,
     Bullseye,
@@ -31,6 +32,7 @@ const SystemConfigPage = (): ReactElement => {
     const { hasReadAccess, hasReadWriteAccess } = usePermissions();
     */
     const { hasReadWriteAccess } = usePermissions();
+    const location = useLocation();
     const hasReadWriteAccessForAdministration = hasReadWriteAccess('Administration');
     /*
     const isClustersRoutePathRendered = getIsRoutePathRendered({
@@ -66,6 +68,15 @@ const SystemConfigPage = (): ReactElement => {
                 setIsLoading(false);
             });
     }, []);
+
+    useEffect(() => {
+        if (!isLoading && location.hash) {
+            const el = document.getElementById(location.hash.slice(1));
+            if (el) {
+                setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+            }
+        }
+    }, [isLoading, location.hash]);
 
     function onClickEdit() {
         setIsEditing(true);

@@ -75,17 +75,16 @@ type CVERecord struct {
 	KEVDueDate       string `json:"kev_due_date"`
 	SLADeadline      string `json:"sla_deadline"`
 	SLATier          string `json:"sla_tier"`
-	CVEPublished     string `json:"cve_published"`
-	ImageCatalogURL  string `json:"image_catalog_url"`
+	CVEPublished       string `json:"cve_published"`
+	ImageCatalogURL    string `json:"image_catalog_url"`
+	RHFixState         string `json:"rh_fix_state"`
+	RHFixStateDetail   string `json:"rh_fix_state_detail"`
 }
 
 type Settings struct {
-	RoxEndpoint            string `json:"rox_endpoint"`
-	RoxAPIToken            string `json:"rox_api_token"`
 	PullSecret             string `json:"pull_secret"`
 	OCPTargetVersion       string `json:"ocp_target_version"`
 	OCPCurrentVersion      string `json:"ocp_current_version"`
-	SkipTLSVerify          bool   `json:"skip_tls_verify"`
 	ScanWorkers            int    `json:"scan_workers"`
 	AutoRegenerateEnabled  bool   `json:"auto_regenerate_enabled"`
 	AutoRegenerateSchedule string `json:"auto_regenerate_schedule"`

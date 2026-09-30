@@ -71,7 +71,6 @@ var nsRemediation = map[string]string{
 var allowedRegistries = []string{
 	"registry.redhat.io/",
 	"quay.io/",
-	"image-registry.openshift-image-registry.svc:5000/",
 }
 
 var priorityOrder = map[string]int{
@@ -180,6 +179,15 @@ func triageReasoning(severity string, cvss, epss float64, nvdCVSS string) string
 }
 
 func poamJustification(priority, action, fixedIn, remediation string) string {
+	if action == "UPDATE" {
+		urgency := "MODERATE"
+		if strings.HasPrefix(priority, "P1") {
+			urgency = "URGENT"
+		} else if strings.HasPrefix(priority, "P2") {
+			urgency = "HIGH"
+		}
+		return fmt.Sprintf("POA&M Required (%s). Fixed in latest image — update deployment. %s", urgency, remediation)
+	}
 	if action == "PATCH" {
 		urgency := "MODERATE"
 		if strings.HasPrefix(priority, "P1") {
@@ -194,6 +202,47 @@ func poamJustification(priority, action, fixedIn, remediation string) string {
 		return fmt.Sprintf("POA&M Required (%s). Constraint: %s - %s", urgency, remediation, fixNote)
 	}
 	return fmt.Sprintf("POA&M Informational. Low-risk, monitor for upstream patches. %s", remediation)
+}
+
+// RefineActions adjusts the action field based on enrichment data collected during the pipeline.
+// Must run after all enrichment steps (Red Hat scores, image scanning, OCP components).
+func RefineActions(records []cveatypes.CVERecord, logf func(string, ...interface{})) {
+	var updated, toUpdate, toMonitor int
+	for i := range records {
+		r := &records[i]
+		origAction := r.Action
+
+		// RH says not affected or won't fix → MONITOR regardless of score
+		switch r.RHFixState {
+		case "Will not fix", "Not affected", "Fix deferred":
+			r.Action = "MONITOR"
+			if origAction != "MONITOR" {
+				toMonitor++
+			}
+			r.POAMJustification = poamJustification(r.Priority, r.Action, r.FixedIn, r.RemediationPath)
+			continue
+		}
+
+		// Only refine records that scored high enough for PATCH
+		if origAction != "PATCH" {
+			continue
+		}
+
+		if r.FixStatus == "FIXED_IN_LATEST" {
+			r.Action = "UPDATE"
+			toUpdate++
+		} else if r.FixedIn == "" && r.FixStatus != "FIXED_IN_LATEST" {
+			// No component fix and latest image doesn't resolve it
+			r.Action = "MONITOR"
+			toMonitor++
+		}
+
+		if r.Action != origAction {
+			r.POAMJustification = poamJustification(r.Priority, r.Action, r.FixedIn, r.RemediationPath)
+			updated++
+		}
+	}
+	logf("  Refined actions: %d UPDATE, %d downgraded to MONITOR, %d total changed", toUpdate, toMonitor, updated)
 }
 
 type csvGroup struct {
@@ -320,6 +369,7 @@ func ParseAndTriage(csvData []byte) ([]cveatypes.CVERecord, error) {
 			Product:          product,
 			ImageShort:       short,
 			ImageFull:        image,
+			ImageCatalogURL:  buildCurrentImageCatalogURL(image),
 			Cluster:          joinSorted(g.clusters),
 			Namespaces:       joinSorted(g.namespaces),
 			Deployments:      joinSorted(g.deployments),
@@ -376,4 +426,27 @@ func joinSorted(m map[string]bool) string {
 	}
 	sort.Strings(items)
 	return strings.Join(items, "; ")
+}
+
+func buildCurrentImageCatalogURL(imageRef string) string {
+	base := imageRef
+	if idx := strings.Index(base, "@"); idx >= 0 {
+		base = base[:idx]
+	} else if idx := strings.LastIndex(base, ":"); idx >= 0 {
+		base = base[:idx]
+	}
+
+	if strings.HasPrefix(base, "registry.redhat.io/") {
+		repoPath := strings.TrimPrefix(base, "registry.redhat.io/")
+		return "https://catalog.redhat.com/en/software/containers/" + repoPath
+	}
+	if strings.HasPrefix(base, "quay.io/") {
+		repoPath := strings.TrimPrefix(base, "quay.io/")
+		if strings.Contains(imageRef, "@sha256:") {
+			digest := imageRef[strings.Index(imageRef, "@")+1:]
+			return "https://quay.io/repository/" + repoPath + "/manifest/" + digest
+		}
+		return "https://quay.io/repository/" + repoPath
+	}
+	return ""
 }

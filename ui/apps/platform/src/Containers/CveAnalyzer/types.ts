@@ -46,6 +46,8 @@ export interface CVERecord {
   cve_published: string;
   fix_published_date: string;
   image_catalog_url: string;
+  rh_fix_state: string;
+  rh_fix_state_detail: string;
   key: string;
 }
 
@@ -64,12 +66,9 @@ export interface Report {
 }
 
 export interface Settings {
-  rox_endpoint: string;
-  rox_api_token: string;
   pull_secret: string;
   ocp_target_version: string;
   ocp_current_version: string;
-  skip_tls_verify: boolean;
   scan_workers: number;
   auto_regenerate_enabled: boolean;
   auto_regenerate_schedule: string;

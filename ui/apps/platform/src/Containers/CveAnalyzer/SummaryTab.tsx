@@ -28,12 +28,13 @@ export default function SummaryTab({ data, onDrillDown }: Props) {
   }, [data]);
 
   const productBreakdown = useMemo(() => {
-    const map = new Map<string, { patch: number; monitor: number; total: number }>();
+    const map = new Map<string, { patch: number; update: number; monitor: number; total: number }>();
     for (const r of data) {
       const p = r.product || 'Unknown';
-      const e = map.get(p) || { patch: 0, monitor: 0, total: 0 };
+      const e = map.get(p) || { patch: 0, update: 0, monitor: 0, total: 0 };
       e.total++;
       if (r.action === 'PATCH') e.patch++;
+      else if (r.action === 'UPDATE') e.update++;
       else e.monitor++;
       map.set(p, e);
     }
@@ -179,7 +180,7 @@ export default function SummaryTab({ data, onDrillDown }: Props) {
             <Tbody>
               {actionBreakdown.map(([action, count]) => (
                 <Tr key={action} style={clickable} onClick={() => onDrillDown('action', action)}>
-                  <Td style={{ color: action === 'PATCH' ? '#dc2626' : '#2563eb', fontWeight: 600 }}>{action}</Td>
+                  <Td style={{ color: action === 'PATCH' ? '#dc2626' : action === 'UPDATE' ? '#16a34a' : '#2563eb', fontWeight: 600 }}>{action}</Td>
                   <Td>{count}</Td>
                 </Tr>
               ))}
@@ -192,12 +193,13 @@ export default function SummaryTab({ data, onDrillDown }: Props) {
         <CardTitle>Product Line Breakdown</CardTitle>
         <CardBody>
           <Table aria-label="Product breakdown" variant="compact">
-            <Thead><Tr><Th>Product</Th><Th>PATCH</Th><Th>MONITOR</Th><Th>Total</Th></Tr></Thead>
+            <Thead><Tr><Th>Product</Th><Th>PATCH</Th><Th>UPDATE</Th><Th>MONITOR</Th><Th>Total</Th></Tr></Thead>
             <Tbody>
-              {productBreakdown.map(([product, { patch, monitor, total }]) => (
+              {productBreakdown.map(([product, { patch, update, monitor, total }]) => (
                 <Tr key={product} style={clickable} onClick={() => onDrillDown('product', product)}>
                   <Td>{product}</Td>
                   <Td style={{ color: '#dc2626' }}>{patch}</Td>
+                  <Td style={{ color: '#16a34a' }}>{update}</Td>
                   <Td style={{ color: '#2563eb' }}>{monitor}</Td>
                   <Td>{total}</Td>
                 </Tr>

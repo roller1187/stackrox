@@ -9,7 +9,7 @@ const priorityColor: Record<string, string> = {
   'P2-HIGH-IMPACT': '#ea580c', 'P2-HIGH-EPSS': '#ea580c',
   'P3-MODERATE': '#d97706', 'P4-MONITOR': '#2563eb', 'P5-LOW': '#6b7280',
 };
-const actionColor: Record<string, string> = { PATCH: '#dc2626', MONITOR: '#2563eb' };
+const actionColor: Record<string, string> = { PATCH: '#dc2626', UPDATE: '#16a34a', MONITOR: '#2563eb' };
 const fixColor: Record<string, string> = {
   FIXED_IN_LATEST: '#16a34a', STILL_VULNERABLE: '#dc2626', SCAN_UNAVAILABLE: '#6b7280',
 };
@@ -24,20 +24,24 @@ const FIELD_LABELS: Record<string, string> = {
   priority: 'Priority', action: 'Action', cvss: 'CVSS', rh_cvss: 'RH CVSS',
   epss_pct: 'EPSS', fix_status: 'Fix Status', severity: 'Severity',
   rh_severity: 'RH Severity', kev_date_added: 'KEV', component_version: 'Version',
-  fixed_in: 'Fixed In',
+  fixed_in: 'Fixed In', rh_fix_state: 'RH Fix State',
 };
 
-function buildImageLink(ref: string, catUrl: string) {
+function buildImageLink(ref: string, catUrl?: string) {
   if (!ref) return null;
-  if (ref.includes('quay.io/') && ref.includes('@sha256:') && !ref.includes('ocp-v4.0-art-dev')) {
+  if (catUrl) return catUrl;
+  if (ref.includes('quay.io/') && ref.includes('@sha256:')) {
     const [repo, digest] = ref.split('@');
     const rp = repo.replace('quay.io/', '');
     return `https://quay.io/repository/${rp}/manifest/${digest}`;
   }
-  if (catUrl) return catUrl;
   if (ref.includes('quay.io/')) {
-    const rp = ref.replace('quay.io/', '').split(':')[0];
+    const rp = ref.replace('quay.io/', '').split(':')[0].split('@')[0];
     return `https://quay.io/repository/${rp}`;
+  }
+  if (ref.includes('registry.redhat.io/')) {
+    const rp = ref.replace('registry.redhat.io/', '').split(':')[0].split('@')[0];
+    return `https://catalog.redhat.com/en/software/containers/${rp}`;
   }
   return null;
 }
@@ -140,11 +144,18 @@ interface Props {
   onClose: () => void;
   toolbarRef?: React.RefObject<HTMLDivElement | null>;
   allData?: CVERecord[];
+  notes?: Record<string, string>;
+  onSetNote?: (key: string, note: string) => void;
+  noteSaveStatus?: 'idle' | 'saving' | 'saved' | 'error';
 }
 
-export default function RecordDetailPanel({ row, processedKeys, fpKeys, onToggleProcessed, onToggleFP, updates, onAcknowledge, onClose, toolbarRef, allData }: Props) {
+export default function RecordDetailPanel({ row, processedKeys, fpKeys, onToggleProcessed, onToggleFP, updates, onAcknowledge, onClose, toolbarRef, allData, notes, onSetNote, noteSaveStatus }: Props) {
   const upd = updates[row.key];
   const hasUpdate = upd && !upd.acknowledged;
+  const isProcessed = processedKeys.has(row.key);
+  const currentNote = notes?.[row.key] || '';
+  const [noteText, setNoteText] = useState(currentNote);
+  useEffect(() => { setNoteText(notes?.[row.key] || ''); }, [row.key, notes]);
 
   const imageVulns = useMemo(() => {
     if (!allData) return null;
@@ -252,14 +263,19 @@ export default function RecordDetailPanel({ row, processedKeys, fpKeys, onToggle
           </Button>
         </div>
         {hasUpdate && (
-          <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 4, backgroundColor: 'rgba(217,119,6,.15)', border: '1px solid #d97706' }}>
-            <div style={{ fontSize: '.72rem', fontWeight: 600, color: '#d97706', marginBottom: 4 }}>Changed since last scan</div>
-            {Object.entries(upd.fields).map(([f, v]) => (
-              <div key={f} style={{ fontSize: '.78rem', color: '#e2e8f0' }}>
-                {FIELD_LABELS[f] || f}: <span style={{ color: '#94a3b8' }}>{v.old || '--'}</span> {'->'} <span style={{ color: '#d97706' }}>{v.new || '--'}</span>
-              </div>
-            ))}
-            <Button variant="link" size="sm" style={{ marginTop: 4, padding: 0 }} onClick={() => onAcknowledge([row.key])}>
+          <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 6, backgroundColor: 'rgba(217,119,6,.1)', border: '1px solid #d97706' }}>
+            <div style={{ fontSize: '.72rem', fontWeight: 600, color: '#d97706', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.03em' }}>Changed since last scan</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {Object.entries(upd.fields).map(([f, v]) => (
+                <div key={f} style={{ fontSize: '.82rem' }}>
+                  <span style={{ fontWeight: 600 }}>{FIELD_LABELS[f] || f}: </span>
+                  <span style={{ color: '#dc2626', textDecoration: 'line-through' }}>{v.old || '--'}</span>
+                  <span style={{ margin: '0 4px' }}>→</span>
+                  <span style={{ fontWeight: 700, color: '#16a34a' }}>{v.new || '--'}</span>
+                </div>
+              ))}
+            </div>
+            <Button variant="link" size="sm" style={{ marginTop: 8, padding: 0 }} onClick={() => onAcknowledge([row.key])}>
               Acknowledge
             </Button>
           </div>
@@ -287,6 +303,18 @@ export default function RecordDetailPanel({ row, processedKeys, fpKeys, onToggle
             {row.component} {row.component_version}
           </span>
           <span style={{ color: '#94a3b8' }}>Fixed In</span><span>{row.fixed_in || '--'}</span>
+          {row.rh_fix_state && (
+            <><span style={{ color: '#94a3b8' }}>RH Fix State</span><span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Label style={{ backgroundColor: ({
+                'Affected': '#dc2626', 'Fix deferred': '#d97706', 'Will not fix': '#d97706',
+                'Not affected': '#16a34a', 'Fix Available': '#16a34a',
+                'New': '#6b7280', 'Out of support scope': '#6b7280',
+              } as Record<string, string>)[row.rh_fix_state] || '#6b7280', color: '#fff', fontSize: '.7rem' }}>
+                {row.rh_fix_state}
+              </Label>
+              {row.rh_fix_state_detail && <span style={{ fontSize: '.75rem', color: '#94a3b8' }}>{row.rh_fix_state_detail}</span>}
+            </span></>
+          )}
           {row.cve_published && (
             <><span style={{ color: '#94a3b8' }}>CVE Published</span><span>{(() => {
               try {
@@ -382,6 +410,21 @@ export default function RecordDetailPanel({ row, processedKeys, fpKeys, onToggle
           </DetailSection>
         )}
 
+        {row.fixed_in && (row.rh_fix_state === 'Affected' || row.rh_fix_state === 'Fix deferred' || row.rh_fix_state === 'Will not fix') && (
+          <DetailSection title="Upstream Fix Not Shipped" borderColor="#dc2626">
+            <div style={{ fontSize: '.82rem', color: '#fca5a5' }}>
+              <div>
+                The upstream component has a fix available in version <strong>{row.fixed_in}</strong>,
+                but Red Hat has <strong>not shipped</strong> an updated container image for <strong>{row.image_short}</strong>.
+              </div>
+              <div style={{ marginTop: 6, fontSize: '.75rem', color: '#94a3b8' }}>
+                The &quot;Fixed In&quot; version refers to the upstream library, not to a Red Hat container image update.
+                Monitor the Red Hat CVE page for errata releases.
+              </div>
+            </div>
+          </DetailSection>
+        )}
+
         <DetailSection title="roxctl Scan Verification">
           <div style={{ fontSize: '.82rem' }}>
             <div>
@@ -393,9 +436,12 @@ export default function RecordDetailPanel({ row, processedKeys, fpKeys, onToggle
             </div>
             {row.image_full && (
               <div style={{ marginTop: 4, fontSize: '.78rem', wordBreak: 'break-all' }}>
-                {row.image_catalog_url ? (
-                  <a href={row.image_catalog_url} target="_blank" rel="noreferrer" style={{ color: '#38bdf8' }}>{row.image_full}</a>
-                ) : <span style={{ color: '#94a3b8' }}>{row.image_full}</span>}
+                {(() => {
+                  const href = buildImageLink(row.image_full, row.image_catalog_url);
+                  return href ? (
+                    <a href={href} target="_blank" rel="noreferrer" style={{ color: '#38bdf8' }}>{row.image_full}</a>
+                  ) : <span style={{ color: '#94a3b8' }}>{row.image_full}</span>;
+                })()}
               </div>
             )}
             {row.fix_status && (
@@ -509,6 +555,45 @@ export default function RecordDetailPanel({ row, processedKeys, fpKeys, onToggle
         {row.poam_justification && (
           <DetailSection title="POA&amp;M Justification">
             <div style={{ fontSize: '.82rem', whiteSpace: 'pre-wrap' }}>{row.poam_justification}</div>
+          </DetailSection>
+        )}
+
+        {row.fixed_in && (row.rh_fix_state === 'Affected' || row.rh_fix_state === 'Fix deferred' || row.rh_fix_state === 'Will not fix') && (
+          <DetailSection title="Upstream Fix Not Shipped" borderColor="#dc2626">
+            <div style={{ fontSize: '.82rem', color: '#fca5a5' }}>
+              <div>
+                The upstream component has a fix available in version <strong>{row.fixed_in}</strong>,
+                but Red Hat has <strong>not shipped</strong> an updated container image for <strong>{row.image_short}</strong>.
+              </div>
+              <div style={{ marginTop: 6, fontSize: '.75rem', color: '#94a3b8' }}>
+                The &quot;Fixed In&quot; version refers to the upstream library, not to a Red Hat container image update.
+                Monitor the Red Hat CVE page for errata releases.
+              </div>
+            </div>
+          </DetailSection>
+        )}
+
+        {isProcessed && onSetNote && (
+          <DetailSection title="Triage Note" borderColor="#2563eb">
+            <textarea
+              value={noteText}
+              onChange={e => setNoteText(e.target.value)}
+              onBlur={() => { if (noteText !== currentNote) onSetNote(row.key, noteText); }}
+              placeholder="Add a note about this finding..."
+              rows={3}
+              style={{
+                width: '100%', background: '#1e293b', color: '#e2e8f0', border: '1px solid #475569',
+                borderRadius: 4, padding: 8, fontSize: '.82rem', resize: 'vertical', fontFamily: 'inherit',
+              }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+              <Button variant="primary" size="sm" onClick={() => onSetNote(row.key, noteText)} isDisabled={noteText === currentNote}>
+                Save
+              </Button>
+              <span style={{ fontSize: '.75rem', color: noteSaveStatus === 'saved' ? '#16a34a' : noteSaveStatus === 'error' ? '#dc2626' : noteSaveStatus === 'saving' ? '#d97706' : 'transparent' }}>
+                {noteSaveStatus === 'saving' ? 'Saving...' : noteSaveStatus === 'saved' ? 'Saved' : noteSaveStatus === 'error' ? 'Save failed' : ''}
+              </span>
+            </div>
           </DetailSection>
         )}
 

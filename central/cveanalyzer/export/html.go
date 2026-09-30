@@ -20,6 +20,7 @@ var priorityColors = map[string]string{
 
 var actionColors = map[string]string{
 	"PATCH":   "#dc2626",
+	"UPDATE":  "#16a34a",
 	"MONITOR": "#2563eb",
 }
 
@@ -59,15 +60,19 @@ a:hover { text-decoration: underline; }
 
 	// Summary stats
 	patchCount := 0
+	updateCount := 0
 	monitorCount := 0
 	kevCount := 0
 	uniqueCVEs := make(map[string]bool)
 	fixedCount := 0
 	for _, r := range records {
 		uniqueCVEs[r.CVE] = true
-		if r.Action == "PATCH" {
+		switch r.Action {
+		case "PATCH":
 			patchCount++
-		} else {
+		case "UPDATE":
+			updateCount++
+		default:
 			monitorCount++
 		}
 		if r.KEVDateAdded != "" {
@@ -82,11 +87,12 @@ a:hover { text-decoration: underline; }
 <div class="stat"><div class="stat-value">%d</div><div class="stat-label">Total Records</div></div>
 <div class="stat"><div class="stat-value">%d</div><div class="stat-label">Unique CVEs</div></div>
 <div class="stat"><div class="stat-value" style="color:#dc2626">%d</div><div class="stat-label">PATCH</div></div>
+<div class="stat"><div class="stat-value" style="color:#16a34a">%d</div><div class="stat-label">UPDATE</div></div>
 <div class="stat"><div class="stat-value" style="color:#2563eb">%d</div><div class="stat-label">MONITOR</div></div>
 <div class="stat"><div class="stat-value" style="color:#d97706">%d</div><div class="stat-label">KEV</div></div>
 <div class="stat"><div class="stat-value" style="color:#16a34a">%d</div><div class="stat-label">Fixed</div></div>
 </div>
-`, len(records), len(uniqueCVEs), patchCount, monitorCount, kevCount, fixedCount)
+`, len(records), len(uniqueCVEs), patchCount, updateCount, monitorCount, kevCount, fixedCount)
 
 	// Table
 	fmt.Fprint(w, `<table>

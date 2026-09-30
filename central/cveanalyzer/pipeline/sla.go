@@ -54,6 +54,8 @@ func ComputeSLADeadlines(records []cveatypes.CVERecord) {
 			"2006-01-02T15:04:05Z",
 			"2006-01-02 15:04:05",
 			"2006-01-02",
+			"January 02, 2006",
+			"January 2, 2006",
 		} {
 			if parsed, err := time.Parse(layout, discovered); err == nil {
 				t = parsed
@@ -83,20 +85,22 @@ func DetectChanges(oldRecords, newRecords []cveatypes.CVERecord) map[string]cvea
 	}
 
 	trackedFields := []struct {
-		name string
-		get  func(*cveatypes.CVERecord) string
+		name       string
+		get        func(*cveatypes.CVERecord) string
+		enrichment bool
 	}{
-		{"priority", func(r *cveatypes.CVERecord) string { return r.Priority }},
-		{"action", func(r *cveatypes.CVERecord) string { return r.Action }},
-		{"cvss", func(r *cveatypes.CVERecord) string { return r.CVSS }},
-		{"rh_cvss", func(r *cveatypes.CVERecord) string { return r.RHCVSS }},
-		{"epss_pct", func(r *cveatypes.CVERecord) string { return r.EpssPct }},
-		{"fix_status", func(r *cveatypes.CVERecord) string { return r.FixStatus }},
-		{"severity", func(r *cveatypes.CVERecord) string { return r.Severity }},
-		{"rh_severity", func(r *cveatypes.CVERecord) string { return r.RHSeverity }},
-		{"kev_date_added", func(r *cveatypes.CVERecord) string { return r.KEVDateAdded }},
-		{"component_version", func(r *cveatypes.CVERecord) string { return r.ComponentVersion }},
-		{"fixed_in", func(r *cveatypes.CVERecord) string { return r.FixedIn }},
+		{"priority", func(r *cveatypes.CVERecord) string { return r.Priority }, false},
+		{"action", func(r *cveatypes.CVERecord) string { return r.Action }, false},
+		{"cvss", func(r *cveatypes.CVERecord) string { return r.CVSS }, false},
+		{"rh_cvss", func(r *cveatypes.CVERecord) string { return r.RHCVSS }, true},
+		{"epss_pct", func(r *cveatypes.CVERecord) string { return r.EpssPct }, false},
+		{"fix_status", func(r *cveatypes.CVERecord) string { return r.FixStatus }, true},
+		{"severity", func(r *cveatypes.CVERecord) string { return r.Severity }, false},
+		{"rh_severity", func(r *cveatypes.CVERecord) string { return r.RHSeverity }, true},
+		{"kev_date_added", func(r *cveatypes.CVERecord) string { return r.KEVDateAdded }, false},
+		{"component_version", func(r *cveatypes.CVERecord) string { return r.ComponentVersion }, false},
+		{"fixed_in", func(r *cveatypes.CVERecord) string { return r.FixedIn }, false},
+		{"rh_fix_state", func(r *cveatypes.CVERecord) string { return r.RHFixState }, true},
 	}
 
 	updates := make(map[string]cveatypes.UpdateEntry)
@@ -112,9 +116,16 @@ func DetectChanges(oldRecords, newRecords []cveatypes.CVERecord) map[string]cvea
 		for _, f := range trackedFields {
 			oldVal := f.get(oldRec)
 			newVal := f.get(newRec)
-			if oldVal != newVal && (oldVal != "" || newVal != "") {
-				fields[f.name] = cveatypes.FieldChange{Old: oldVal, New: newVal}
+			if oldVal == newVal {
+				continue
 			}
+			if oldVal == "" && newVal == "" {
+				continue
+			}
+			if f.enrichment && oldVal != "" && newVal == "" {
+				continue
+			}
+			fields[f.name] = cveatypes.FieldChange{Old: oldVal, New: newVal}
 		}
 
 		if len(fields) > 0 {
